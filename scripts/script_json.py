@@ -50,6 +50,10 @@ def strip_special_characters(character_id):
     return character_id.replace("_", "").replace("-", "").lower()
 
 
+def name_to_id(name):
+    return name.replace(" ", "").replace("'", "").lower()
+
+
 def strip_special_characters_from_json(json):
     new_json = []
     for item in json:

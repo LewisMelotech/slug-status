@@ -32,7 +32,7 @@ def include_characters(queryset, value):
         character = script_json.strip_special_characters(character.strip())
         if character in ",;:/":
             continue
-        queryset = queryset.filter(content__contains=[{"id": name_to_id(character)}])
+        queryset = queryset.filter(content__contains=[{"id": script_json.name_to_id(character)}])
     return queryset
 
 
@@ -41,12 +41,8 @@ def exclude_characters(queryset, value):
         character = script_json.strip_special_characters(character.strip())
         if character in ",;:/":
             continue
-        queryset = queryset.exclude(content__contains=[{"id": name_to_id(character)}])
+        queryset = queryset.exclude(content__contains=[{"id": script_json.name_to_id(character)}])
     return queryset
-
-
-def name_to_id(name: str):
-    return name.replace(" ", "_").replace("'", "").lower()
 
 
 class BaseScriptVersionFilter(filters.FilterSet):
