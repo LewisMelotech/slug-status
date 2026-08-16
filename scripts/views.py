@@ -1324,9 +1324,12 @@ def create_characters_and_determine_homebrew_status(script_content: dict, script
 
         try:
             character = models.ClocktowerCharacter.objects.get(character_id=item.get("id", ""))
-            # Ignore the use of the official Bootlegger character, this indicates the script
-            # hybrid/homebrew already but shouldn't count against homebrew status.
-            if character.character_id == "bootlegger":
+            # Ignore official Loric and Fabled characters, as they shouldn't count against
+            # homebrew/hybrid status (homebrew Loric/Fabled characters still count).
+            if character.character_type in (
+                models.CharacterType.LORIC,
+                models.CharacterType.FABLED,
+            ):
                 entries_to_ignore += 1
         except models.ClocktowerCharacter.DoesNotExist:
             if roles.ok and character_missing_from_database(item.get("id", ""), js.loads(roles.content)):
