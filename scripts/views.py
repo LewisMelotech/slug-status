@@ -662,9 +662,7 @@ class StatisticsView(generic.ListView, FilterView):
 
         # Build a lookup of character_id -> character, seeding every character's count to 0 so
         # that characters which never appear in the filtered scripts still show up (e.g. in the
-        # "least common" lists). This avoids issuing one query per character (previously this ran
-        # a separate `content__contains` query, and therefore a full queryset scan, for every
-        # single character in the game).
+        # "least common" lists).
         character_lookup = {}
         for character in cache.get_clocktower_characters().values():
             # If we're on a Character Statistics page, don't include this character in the count.
