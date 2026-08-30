@@ -660,14 +660,25 @@ class StatisticsView(generic.ListView, FilterView):
             character_count[type.value] = Counter()
             num_count[type.value] = Counter()
 
-        for character in models.ClocktowerCharacter.objects.all():
+        # Build a lookup of character_id -> character, seeding every character's count to 0 so
+        # that characters which never appear in the filtered scripts still show up (e.g. in the
+        # "least common" lists). This avoids issuing one query per character (previously this ran
+        # a separate `content__contains` query, and therefore a full queryset scan, for every
+        # single character in the game).
+        character_lookup = {}
+        for character in cache.get_clocktower_characters().values():
             # If we're on a Character Statistics page, don't include this character in the count.
             if character == stats_character:
                 continue
+            character_count[character.character_type][character] = 0
+            character_lookup[character.character_id] = character
 
-            character_count[character.character_type][character] = queryset.filter(
-                content__contains=[{"id": character.character_id}]
-            ).count()
+        for content in queryset.values_list("content", flat=True):
+            ids_in_script = {item.get("id") for item in content if isinstance(item, dict)}
+            for character_id in ids_in_script:
+                character = character_lookup.get(character_id)
+                if character is not None:
+                    character_count[character.character_type][character] += 1
 
         for type in models.CharacterType:
             context[type.value] = character_count[type.value].most_common(characters_to_display)
