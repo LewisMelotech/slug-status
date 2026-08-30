@@ -13,7 +13,7 @@
     <div class="form-group row mb-0">
         <div class="container">
             <div class="row p-1">
-                <a class="btn btn-primary mr-1" href="#" role="button" onclick="this.closest('form').submit(); return false;">Filter</a>
+                {% bootstrap_button 'Filter' button_class='btn-primary' extra_classes="mr-1 btn-shaded-text" %}
                 {% bootstrap_button 'Clear' button_class='btn-primary' href="/" %}
                 <div class="col">
                     <p class="font-weight-bold text-right">
