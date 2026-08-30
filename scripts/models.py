@@ -2,6 +2,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from django.contrib.auth.models import User
+from django.contrib.postgres.indexes import GinIndex
 from django.db import models
 from versionfield import VersionField
 
@@ -159,6 +160,7 @@ class ScriptVersion(models.Model):
             models.Index(fields=["num_demons"], name="sv_num_demons_idx"),
             models.Index(fields=["script", "version"], name="sv_script_and_version_idx"),
             models.Index(fields=["latest", "homebrewiness"], name="sv_latest_and_homebrew_idx"),
+            GinIndex(fields=["content"], name="sv_content_gin_idx"),
         ]
 
 
