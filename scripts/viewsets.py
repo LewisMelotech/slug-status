@@ -66,11 +66,16 @@ class VersionViewSet(viewsets.ModelViewSet):
     pagination_class = ScriptPagination
 
     def get_queryset(self):
-        queryset = models.ScriptVersion.plain_objects.annotate(score=Count("script__votes", distinct=True))
+        return models.ScriptVersion.plain_objects.annotate(score=Count("script__votes", distinct=True))
+
+    def filter_queryset(self, queryset):
+        # Retrieving a single script by pk should never be filtered, e.g. by "latest".
+        if self.action == "retrieve":
+            return queryset
         latest = self.request.query_params.get("latest")
         if latest:
             queryset = queryset.filter(latest=True)
-        return queryset
+        return super().filter_queryset(queryset)
 
     @action(methods=["get"], detail=True)
     def json(self, _, pk=None):
