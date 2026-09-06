@@ -6,7 +6,7 @@ from django.contrib.postgres.indexes import GinIndex
 from django.db import models
 from versionfield import VersionField
 
-from scripts import constants
+from scripts import constants, slugs
 from scripts.managers import CollectionManager, ScriptViewManager
 
 
@@ -86,11 +86,31 @@ class Script(models.Model):
     """
 
     name = models.CharField(max_length=constants.MAX_SCRIPT_NAME_LENGTH)
+    slug = models.SlugField(
+        max_length=constants.MAX_SLUG_LENGTH,
+        unique=True,
+        null=True,
+        blank=True,
+        validators=[slugs.validate_script_slug],
+        help_text=(
+            "Optional custom id for this script, e.g. 'sects-and-violets'. Usable anywhere the "
+            "numeric id is, so it cannot itself be a number. Leave blank for no slug."
+        ),
+    )
     owner = models.ForeignKey(User, blank=True, null=True, on_delete=models.SET_NULL, related_name="+")
     num_downloads = models.IntegerField(default=0)
 
     def __str__(self):
         return f"{self.pk}. {self.name}"
+
+    def save(self, *args, **kwargs):
+        # Canonicalise here rather than only at the form/serializer boundary so
+        # that every write path stores one spelling. Uniqueness is a plain
+        # unique index on the column, which is therefore case-insensitive in
+        # effect, and blank slugs are stored as NULL so unslugged scripts do not
+        # collide with each other.
+        self.slug = slugs.normalise_slug(self.slug)
+        return super().save(*args, **kwargs)
 
     def latest_version(self):
         return self.versions.order_by("-version").first()
