@@ -5,7 +5,7 @@ from django import forms
 from django.contrib.postgres.search import TrigramSimilarity
 from django_filters import rest_framework as filters
 
-from scripts import models, script_json, widgets
+from scripts import models, script_json, slugs, widgets
 
 edition_choices = (
     (models.Edition.BASE, models.Edition.BASE.label),
@@ -185,6 +185,24 @@ class FavouriteScriptVersionFilter(ScriptVersionFilter):
             "all_scripts",
             "include_hybrid",
             "include_homebrew",
+        ]
+
+
+class ScriptFilter(filters.FilterSet):
+    slug = django_filters.filters.CharFilter(method="filter_slug", label="Slug")
+
+    def filter_slug(self, queryset, _, value):
+        slug = slugs.normalise_slug(value)
+        if not slug:
+            # A blank slug is not "every unslugged script": ?slug= with nothing
+            # useful in it must never quietly return the whole table.
+            return queryset.none()
+        return queryset.filter(slug=slug)
+
+    class Meta:
+        model = models.Script
+        fields = [
+            "slug",
         ]
 
 

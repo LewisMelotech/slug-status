@@ -1,5 +1,6 @@
 from django.db.models import Count
 from django.http import Http404
+from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
 from rest_framework.authentication import BasicAuthentication
@@ -11,7 +12,7 @@ from rest_framework.response import Response
 from versionfield import Version
 
 from scripts import filters as filtersets
-from scripts import models, script_json, serializers
+from scripts import models, script_json, serializers, slugs
 from scripts.views import (
     calculate_edition,
     count_character,
@@ -51,9 +52,56 @@ class ScriptViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = models.Script.objects.all()
     serializer_class = serializers.ScriptSerializer
     pagination_class = ScriptPagination
-    filter_backends = [filters.OrderingFilter]
+    filter_backends = [filters.OrderingFilter, DjangoFilterBackend]
+    filterset_class = filtersets.ScriptFilter
     ordering_fields = ["pk"]
     ordering = ["-pk"]
+
+    def get_permissions(self):
+        # Reads stay open, exactly as before. The slug write has to be named
+        # explicitly: this viewset declares no permission_classes of its own, so
+        # otherwise the write would fall back to DEFAULT_PERMISSION_CLASSES and
+        # demand the scripts.change_script model permission instead of the
+        # scripts.api_write_permission the rest of the write API uses.
+        if self.action == "slug":
+            permission_classes = [IsAuthenticated, ScriptApiPermissions]
+        else:
+            permission_classes = []
+        return [permission() for permission in permission_classes]
+
+    @action(methods=["get"], detail=False, url_path=r"slug/(?P<slug>[^/.]+)")
+    def by_slug(self, request, slug=None):
+        """
+        Retrieve a script by its slug, e.g. /api/script_ids/slug/sects/.
+
+        A sibling of the numeric detail route rather than a replacement for it:
+        lookup_field stays "pk", so /api/script_ids/<pk>/ is untouched.
+        """
+        normalised = slugs.normalise_slug(slug)
+        if not normalised:
+            # Never fall through to filter(slug=None), which would match every
+            # unslugged script rather than nothing.
+            raise Http404
+        script = get_object_or_404(self.get_queryset(), slug=normalised)
+        return Response(self.get_serializer(script).data)
+
+    # Authenticated with HTTP Basic, which DRF applies from its own defaults
+    # because the project sets no DEFAULT_AUTHENTICATION_CLASSES.
+    @action(methods=["patch", "delete"], detail=True)
+    def slug(self, request, pk=None):
+        """
+        Set or clear the slug of a script.
+
+        PATCH /api/script_ids/<pk>/slug/ with {"slug": "sects"} sets it;
+        {"slug": null} or {"slug": ""} clears it, as does DELETE on the same
+        URL. Requires the scripts.api_write_permission permission.
+        """
+        script = self.get_object()
+        data = {"slug": None} if request.method == "DELETE" else request.data
+        serializer = serializers.ScriptSlugSerializer(script, data=data, context=self.get_serializer_context())
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(self.get_serializer(script).data, status=status.HTTP_200_OK)
 
 
 class VersionViewSet(viewsets.ModelViewSet):

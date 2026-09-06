@@ -1,7 +1,45 @@
 from rest_framework import serializers
 from rest_framework.reverse import reverse
+from rest_framework.validators import UniqueValidator
 
-from scripts import constants, models, script_json
+from scripts import constants, models, script_json, slugs
+
+
+class ScriptSlugField(serializers.SlugField):
+    """
+    A slug field that canonicalises its input before anything else looks at it.
+
+    Normalising in to_internal_value rather than in a validate_<field> hook is
+    load-bearing: DRF runs field validators (including UniqueValidator) on the
+    value to_internal_value returns, so lowercasing here is what makes
+    uniqueness case-insensitive. Normalising later would let "Sects" pass the
+    uniqueness check against an existing "sects" and then fail in the database
+    with a 500 rather than a 400.
+    """
+
+    def to_internal_value(self, data):
+        return super().to_internal_value(data).strip().lower()
+
+
+def slug_serializer_field(**kwargs) -> ScriptSlugField:
+    """
+    The slug field as the API exposes it. Declaring the validators explicitly
+    means ModelSerializer does not add its own, so the model's rules and the
+    uniqueness check are applied from one place.
+    """
+    return ScriptSlugField(
+        max_length=constants.MAX_SLUG_LENGTH,
+        allow_null=True,
+        allow_blank=True,
+        validators=[
+            slugs.validate_script_slug,
+            UniqueValidator(
+                queryset=models.Script.objects.all(),
+                message="That slug is already used by another script.",
+            ),
+        ],
+        **kwargs,
+    )
 
 
 class CollectionSerializer(serializers.ModelSerializer):
@@ -21,10 +59,11 @@ class CollectionSerializer(serializers.ModelSerializer):
 class ScriptSerializer(serializers.ModelSerializer):
     versions = serializers.SerializerMethodField()
     latest_version = serializers.SerializerMethodField()
+    slug = slug_serializer_field(required=False)
 
     class Meta:
         model = models.Script
-        fields = ["pk", "name", "versions", "latest_version"]
+        fields = ["pk", "name", "slug", "versions", "latest_version"]
 
     def get_versions(self, obj):
         request = self.context.get("request")
@@ -44,11 +83,36 @@ class ScriptSerializer(serializers.ModelSerializer):
 class VersionSerializer(serializers.ModelSerializer):
     name = serializers.CharField(source="script.name")
     script_id = serializers.IntegerField(source="script.pk", read_only=True)
+    # The slug identifies the Script, not this version, but clients read version
+    # rows far more often than script rows, so carry it across the relation the
+    # same way the name is carried. Null for a script with no slug.
+    slug = serializers.CharField(source="script.slug", read_only=True)
     score = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = models.ScriptVersion
-        fields = ["pk", "script_id", "name", "version", "script_type", "author", "content", "score"]
+        fields = ["pk", "script_id", "name", "slug", "version", "script_type", "author", "content", "score"]
+
+
+class ScriptSlugSerializer(serializers.ModelSerializer):
+    """
+    Write serializer for the slug endpoint. `slug` is required so that a request
+    body that forgot it is a 400 rather than a silent no-op; send null (or an
+    empty string) to clear the slug.
+    """
+
+    slug = slug_serializer_field(required=True)
+
+    class Meta:
+        model = models.Script
+        fields = ["slug"]
+
+    def validate_slug(self, value):
+        # An empty string reaches here untouched (CharField short-circuits blank
+        # input before to_internal_value), so fold it to NULL: "no slug" has to
+        # be one value, because NULLs are distinct under the unique index and
+        # empty strings are not.
+        return slugs.normalise_slug(value)
 
 
 class TranslationSerializer(serializers.ModelSerializer):
