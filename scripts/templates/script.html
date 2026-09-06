@@ -97,6 +97,11 @@
             {{ script.name }} - v{{ script_version.version }}
         </h1>
     </div>
+    {% if script.slug %}
+    <div class="col-auto align-self-end pb-2">
+        <a class="badge badge-pill badge-secondary" href="{% url 'script_by_slug' script.slug %}" title="Short link for this script">/script/{{ script.slug }}</a>
+    </div>
+    {% endif %}
     <div class="col-auto ml-auto align-self-end">
         {% include "info.html" with record=script_version %}
     </div>

@@ -35,6 +35,7 @@ from scripts import (
     forms,
     models,
     script_json,
+    slugs,
     tables,
 )
 
@@ -171,6 +172,22 @@ def calculate_edition(script_content: dict) -> int:
 class ScriptView(generic.DetailView):
     template_name = "script.html"
     model = models.Script
+    # Stated explicitly rather than left to DetailView's defaults because they
+    # are what makes script/<slug:slug> work: SingleObjectMixin.get_object()
+    # uses the pk when the URL supplies one and falls back to matching this
+    # field otherwise, so both /script/13108 and /script/sects reach this view
+    # with no branching of our own.
+    slug_field = "slug"
+    slug_url_kwarg = "slug"
+
+    def get_object(self, queryset=None):
+        slug = self.kwargs.get(self.slug_url_kwarg)
+        if slug:
+            # /script/SECTS should land on the same page as /script/sects. Slugs
+            # are stored in one canonical spelling, so fold the URL to it rather
+            # than 404 on capitalisation, matching what the API does.
+            self.kwargs[self.slug_url_kwarg] = slugs.normalise_slug(slug) or slug
+        return super().get_object(queryset)
 
     def get_queryset(self):
         return models.Script.objects.select_related("owner").prefetch_related(

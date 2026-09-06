@@ -123,6 +123,22 @@ urlpatterns = [
     path("script/search", views.AdvancedSearchView.as_view(), name="advanced_search"),
     path("script/search/results", views.AdvancedSearchResultsView.as_view()),
     path("script/upload", views.ScriptUploadView.as_view(), name="upload"),
+    # Slug routes must come LAST in the script/ block. Django's slug converter
+    # matches [-a-zA-Z0-9_]+, which also matches "123", "search", "upload" and
+    # "all_roles", so a slug pattern registered any earlier would swallow the
+    # numeric detail routes and the literal ones above. Registered after them,
+    # every existing script/ URL still wins.
+    #
+    # They also carry their own route name. The patterns above reuse
+    # name="script", which scripts/tables.py reverses for every row link; giving
+    # these the same name would make the last registration win and start
+    # emitting slug links for scripts that may not have a slug.
+    path("script/<slug:slug>", views.ScriptView.as_view(), name="script_by_slug"),
+    path(
+        "script/<slug:slug>/<str:version>",
+        views.ScriptView.as_view(),
+        name="script_by_slug",
+    ),
     path("statistics", views.StatisticsView.as_view()),
     path("statistics/<str:character>", views.StatisticsView.as_view()),
     path("statistics/tags/<int:tags>", views.StatisticsView.as_view()),
