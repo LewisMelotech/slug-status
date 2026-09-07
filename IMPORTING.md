@@ -73,6 +73,52 @@ not change often, and the public site is someone else's server:
 0 4 * * * cd /path/to/discord-botc-script-bot/stack && docker compose exec -T botc-scripts python manage.py sync_upstream
 ```
 
+## Over the API
+
+`POST /api/script_ids/import/` does the same job as `import_script`, so a Discord bot or
+any other client can import without shell access. Reads on this instance stay anonymous;
+this write needs HTTP Basic and the `scripts.api_write_permission` permission — the same
+credential the upload API uses.
+
+```sh
+curl -u botuser:botpass -X POST https://your-instance/api/script_ids/import/ \
+  -H "Content-Type: application/json" \
+  -d '{"reference": "134"}'
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `reference` | required | Script id, or a link to a script page |
+| `source` | the public site | Instance to import from, when `reference` is a bare id |
+| `all_versions` | `false` | Import the full history rather than only the latest |
+| `link` | `true` | Follow this script in `sync_upstream` |
+
+Responses:
+
+| Status | When |
+|---|---|
+| `201` | At least one version was imported |
+| `200` | Everything was already held — `imported` is empty and `skipped` counts them |
+| `400` | Unusable reference, or the far side could not be reached |
+| `403` | No credentials, wrong credentials, or missing the permission |
+
+The body carries the local script, the versions imported, how many were skipped, the
+source and upstream id, and whether it is now linked:
+
+```json
+{
+  "script": {"pk": 7, "name": "Let the Dead Rest in Peace", "slug": null, "versions": {...}},
+  "imported": ["1.0.0"],
+  "skipped": 0,
+  "source": "https://www.botcscripts.com",
+  "upstream_id": 13108,
+  "linked": true
+}
+```
+
+The 200/201 split is deliberate: a caller can tell "nothing changed" from "something was
+created" without diffing the version lists.
+
 ## In the admin
 
 Linked scripts show their upstream id, sync state and last sync time in the script list,

@@ -108,3 +108,34 @@ def test_latest_of_falls_back_to_the_highest_version():
     versions = {"1.0.0": "http://x/1", "11.0.0": "http://x/11", "9.0.0": "http://x/9"}
     # Highest by version ordering, not lexicographically — 11.0.0 beats 9.0.0.
     assert _latest_of(versions, {})[0] == "11.0.0"
+
+
+def test_import_serializer_resolves_a_bare_id_against_the_default_source():
+    from scripts.serializers import ScriptImportSerializer
+
+    serializer = ScriptImportSerializer(data={"reference": "134"})
+    assert serializer.is_valid(), serializer.errors
+    assert serializer.validated_data["upstream_id"] == 134
+    assert serializer.validated_data["source"] == DEFAULT_SOURCE
+    # Linking is the default: an import you have to opt into following would leave
+    # sync_upstream silently doing nothing.
+    assert serializer.validated_data["link"] is True
+    assert serializer.validated_data["all_versions"] is False
+
+
+def test_import_serializer_takes_the_source_from_a_url_reference():
+    from scripts.serializers import ScriptImportSerializer
+
+    serializer = ScriptImportSerializer(data={"reference": "http://botc-scripts:8000/script/7"})
+    assert serializer.is_valid(), serializer.errors
+    assert serializer.validated_data["source"] == "http://botc-scripts:8000"
+    assert serializer.validated_data["upstream_id"] == 7
+
+
+@pytest.mark.parametrize("reference", ["nonsense", "", "https://www.botcscripts.com/script/"])
+def test_import_serializer_rejects_a_reference_without_an_id(reference):
+    from scripts.serializers import ScriptImportSerializer
+
+    serializer = ScriptImportSerializer(data={"reference": reference})
+    assert not serializer.is_valid()
+    assert "reference" in serializer.errors

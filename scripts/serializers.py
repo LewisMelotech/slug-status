@@ -2,7 +2,7 @@ from rest_framework import serializers
 from rest_framework.reverse import reverse
 from rest_framework.validators import UniqueValidator
 
-from scripts import constants, models, script_json, slugs
+from scripts import constants, models, script_json, slugs, upstream
 
 
 class ScriptSlugField(serializers.SlugField):
@@ -113,6 +113,29 @@ class ScriptSlugSerializer(serializers.ModelSerializer):
         # be one value, because NULLs are distinct under the unique index and
         # empty strings are not.
         return slugs.normalise_slug(value)
+
+
+class ScriptImportSerializer(serializers.Serializer):
+    """
+    Write serializer for the import endpoint. `reference` is a script id or a link
+    to a script page on the instance being imported from; `source` says which
+    instance a bare id belongs to.
+    """
+
+    reference = serializers.CharField(required=True, allow_blank=False)
+    source = serializers.CharField(required=False, allow_blank=False, default=upstream.DEFAULT_SOURCE)
+    all_versions = serializers.BooleanField(required=False, default=False)
+    link = serializers.BooleanField(required=False, default=True)
+
+    def validate(self, attrs):
+        # Resolve here so a bad reference or unreachable-looking source is a 400 from
+        # the serializer, in the same shape as every other validation error, rather
+        # than an exception escaping the view.
+        try:
+            attrs["source"], attrs["upstream_id"] = upstream.parse_reference(attrs["reference"], attrs["source"])
+        except upstream.UpstreamError as exc:
+            raise serializers.ValidationError({"reference": [str(exc)]}) from exc
+        return attrs
 
 
 class TranslationSerializer(serializers.ModelSerializer):

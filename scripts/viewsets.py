@@ -12,7 +12,7 @@ from rest_framework.response import Response
 from versionfield import Version
 
 from scripts import filters as filtersets
-from scripts import models, script_json, serializers, slugs
+from scripts import models, script_json, serializers, slugs, upstream
 from scripts.views import (
     calculate_edition,
     count_character,
@@ -63,11 +63,54 @@ class ScriptViewSet(viewsets.ReadOnlyModelViewSet):
         # otherwise the write would fall back to DEFAULT_PERMISSION_CLASSES and
         # demand the scripts.change_script model permission instead of the
         # scripts.api_write_permission the rest of the write API uses.
-        if self.action == "slug":
+        if self.action in ("slug", "import_upstream"):
             permission_classes = [IsAuthenticated, ScriptApiPermissions]
         else:
             permission_classes = []
         return [permission() for permission in permission_classes]
+
+    @authentication_classes([BasicAuthentication])
+    @action(methods=["post"], detail=False, url_path="import")
+    def import_upstream(self, request):
+        """
+        Import a script from another botc-scripts instance.
+
+        POST /api/script_ids/import/ with {"reference": "134"} imports the latest
+        version of script 134 from the public site; "reference" also accepts a link
+        to a script page, and "source" names a different instance for a bare id.
+        Pass {"all_versions": true} for the full history, or {"link": false} for a
+        one-time copy that sync_upstream will not follow. Requires the
+        scripts.api_write_permission permission.
+        """
+        serializer = serializers.ScriptImportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        try:
+            script, imported, skipped = upstream.import_script(
+                data["upstream_id"],
+                source=data["source"],
+                link=data["link"],
+                all_versions=data["all_versions"],
+            )
+        except upstream.UpstreamError as exc:
+            # The far side being unreachable, missing the script, or answering with
+            # something other than JSON is a bad request here, not a 500: nothing on
+            # this instance has gone wrong.
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        payload = {
+            "script": serializers.ScriptSerializer(script, context=self.get_serializer_context()).data,
+            "imported": [str(version.version) for version in imported],
+            "skipped": skipped,
+            "source": data["source"],
+            "upstream_id": data["upstream_id"],
+            "linked": bool(script and script.sync_enabled),
+        }
+        # 200 rather than 201 when everything was already held, so a caller can tell
+        # "nothing changed" from "something was created" without diffing the lists.
+        code = status.HTTP_201_CREATED if imported else status.HTTP_200_OK
+        return Response(payload, status=code)
 
     @action(methods=["get"], detail=False, url_path=r"slug/(?P<slug>[^/.]+)")
     def by_slug(self, request, slug=None):
