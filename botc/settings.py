@@ -184,11 +184,19 @@ MARKDOWNIFY = {
 }
 
 # django-allauth configuration
-LOGIN_METHODS = "email"
-ACCOUNT_EMAIL_REQUIRED = True
-ACCOUNT_USERNAME_REQUIRED = False
+ACCOUNT_LOGIN_METHODS = {"username", "email"}
+ACCOUNT_SIGNUP_FIELDS = ["username*", "email*", "password1*", "password2*"]
 SOCIALACCOUNT_AUTO_SIGNUP = True
 SOCIALACCOUNT_LOGIN_ON_GET = True
+
+# Local username/password accounts, alongside the social providers. Signup closes
+# independently of login, so an instance can invite by hand while existing users still
+# get in. Verification defaults to none because a self-hosted instance rarely has SMTP;
+# with the console backend a verification mail would only reach the container log.
+ACCOUNT_ADAPTER = "scripts.adapters.LocalAccountAdapter"
+LOCAL_SIGNUP_ENABLED = os.getenv("LOCAL_SIGNUP_ENABLED", "True") == "True"
+ACCOUNT_EMAIL_VERIFICATION = os.getenv("ACCOUNT_EMAIL_VERIFICATION", "none")
+EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
 
 # Allow CORS access to the API for GETs only.
 CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS", False) == "True"

@@ -7,26 +7,26 @@
 {% block content %}
 {% get_providers as socialaccount_providers %}
 
-<h4>{% trans 'Log in' %}</h4>
+<h4>{% trans 'Sign up' %}</h4>
 
 <div class="col-md-5 col-lg-5 p-0">
-  <form class="login" method="POST" action="{% url 'account_login' %}">
+  <form class="signup" method="POST" action="{% url 'account_signup' %}">
     {% csrf_token %}
     {% bootstrap_form form %}
     {% if redirect_field_value %}
     <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
     {% endif %}
-    <button class="btn btn-primary" type="submit">{% trans 'Log in' %}</button>
+    <button class="btn btn-primary" type="submit">{% trans 'Sign up' %}</button>
   </form>
   <p class="mt-2">
-    {% trans 'No account?' %} <a href="{% url 'account_signup' %}">{% trans 'Sign up' %}</a>
+    {% trans 'Already have an account?' %} <a href="{% url 'account_login' %}">{% trans 'Log in' %}</a>
   </p>
 </div>
 
 {% if socialaccount_providers %}
 <div class="col-md-5 col-lg-5 p-0">
   <hr>
-  <p>{% trans 'Or log in with:' %}</p>
+  <p>{% trans 'Or sign up with:' %}</p>
   {% include "account/provider_panel.html" with process="login" %}
 </div>
 {% endif %}

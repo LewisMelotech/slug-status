@@ -1,6 +1,6 @@
 from importlib import import_module
 
-from allauth.account.views import login, logout
+from allauth.account.views import login, logout, password_change, signup
 from allauth.socialaccount import providers
 from django.urls import include, path, re_path
 from django.views.generic.base import TemplateView
@@ -154,7 +154,8 @@ urlpatterns = [
     path("worldcup/statistics", worldcup.WorldCupStatisticsView.as_view()),
     re_path(r"^login/$", login, name="account_login"),
     re_path(r"^logout/$", logout, name="account_logout"),
-    re_path(r"^signup/$", login, name="account_signup"),
+    re_path(r"^signup/$", signup, name="account_signup"),
+    re_path(r"^password/change/$", password_change, name="account_change_password"),
 ]
 
 provider_urlpatterns = []
