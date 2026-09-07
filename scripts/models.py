@@ -99,9 +99,31 @@ class Script(models.Model):
     )
     owner = models.ForeignKey(User, blank=True, null=True, on_delete=models.SET_NULL, related_name="+")
     num_downloads = models.IntegerField(default=0)
+    upstream_source = models.URLField(
+        null=True,
+        blank=True,
+        help_text="Base URL of the instance this was imported from, e.g. https://www.botcscripts.com",
+    )
+    upstream_id = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="The script id on the upstream instance, which is unrelated to the id here.",
+    )
+    sync_enabled = models.BooleanField(
+        default=False,
+        help_text="Pull new versions from upstream whenever sync_upstream runs.",
+    )
+    last_synced = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.pk}. {self.name}"
+
+    @property
+    def upstream_url(self):
+        """The script's page on the instance it came from, or None if it is local."""
+        if not (self.upstream_source and self.upstream_id):
+            return None
+        return f"{self.upstream_source.rstrip('/')}/script/{self.upstream_id}"
 
     def save(self, *args, **kwargs):
         # Canonicalise here rather than only at the form/serializer boundary so
@@ -119,6 +141,15 @@ class Script(models.Model):
         indexes = [
             models.Index(fields=["name"], name="script_name_idx"),
             models.Index(fields=["owner"], name="script_owner_idx"),
+        ]
+        constraints = [
+            # One local script per upstream script, so a repeated import updates the
+            # script it already created instead of forking a second copy of it.
+            models.UniqueConstraint(
+                fields=["upstream_source", "upstream_id"],
+                condition=models.Q(upstream_id__isnull=False),
+                name="unique_upstream_script",
+            )
         ]
 
 

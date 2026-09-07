@@ -1,8 +1,8 @@
 # Register your models here.
 from django import forms
-from django.contrib import admin
+from django.contrib import admin, messages
 
-from scripts import models, slugs
+from scripts import models, slugs, upstream
 
 
 class ScriptAdminForm(forms.ModelForm):
@@ -20,17 +20,40 @@ class ScriptAdminForm(forms.ModelForm):
 
 class ScriptAdmin(admin.ModelAdmin):
     form = ScriptAdminForm
-    list_display = ["pk", "name", "slug", "owner"]
+    list_display = ["pk", "name", "slug", "owner", "upstream_id", "sync_enabled", "last_synced"]
     list_display_links = ["pk", "name"]
-    list_editable = ["slug"]
+    list_editable = ["slug", "sync_enabled"]
+    list_filter = ["sync_enabled", "upstream_source"]
     search_fields = ["name", "slug"]
     prepopulated_fields = {"slug": ("name",)}
+    readonly_fields = ["last_synced"]
+    actions = ["sync_now"]
 
     def get_changelist_form(self, request, **kwargs):
         # ModelAdmin.form is deliberately ignored for the editable changelist,
         # so name it again here or inline slug edits would skip clean_slug.
         kwargs.setdefault("form", ScriptAdminForm)
         return super().get_changelist_form(request, **kwargs)
+
+    @admin.action(description="Sync selected scripts from their upstream instance")
+    def sync_now(self, request, queryset):
+        synced = skipped = 0
+        for script in queryset:
+            try:
+                imported = upstream.sync_script(script)
+            except upstream.UpstreamError as exc:
+                self.message_user(request, f"{script}: {exc}", level=messages.ERROR)
+                continue
+            if imported:
+                synced += len(imported)
+                names = ", ".join(str(version.version) for version in imported)
+                self.message_user(request, f"{script}: imported {names}", level=messages.SUCCESS)
+            else:
+                skipped += 1
+        if skipped:
+            self.message_user(request, f"{skipped} script(s) were already up to date.", level=messages.INFO)
+        if synced:
+            self.message_user(request, f"{synced} new version(s) in total.", level=messages.SUCCESS)
 
 
 class ScriptVersionAdmin(admin.ModelAdmin):

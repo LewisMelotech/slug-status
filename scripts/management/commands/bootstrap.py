@@ -76,9 +76,7 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING(skip_hint))
             return
 
-        user, created = User.objects.get_or_create(
-            username=username, defaults={"email": email or ""}
-        )
+        user, created = User.objects.get_or_create(username=username, defaults={"email": email or ""})
         changed = created
 
         if superuser and not (user.is_superuser and user.is_staff):
@@ -106,13 +104,9 @@ class Command(BaseCommand):
     def _grant(self, user, dotted):
         app_label, codename = dotted.split(".", 1)
         try:
-            permission = Permission.objects.get(
-                content_type__app_label=app_label, codename=codename
-            )
+            permission = Permission.objects.get(content_type__app_label=app_label, codename=codename)
         except Permission.DoesNotExist as exc:
-            raise CommandError(
-                f"Permission {dotted!r} does not exist. Run `manage.py migrate` first."
-            ) from exc
+            raise CommandError(f"Permission {dotted!r} does not exist. Run `manage.py migrate` first.") from exc
 
         if user.user_permissions.filter(pk=permission.pk).exists():
             return
