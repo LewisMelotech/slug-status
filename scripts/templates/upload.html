@@ -8,6 +8,12 @@
 
 {% block content %}
 
+<p class="text-muted">
+    Already on another script database?
+    <a href="{% url 'import_script' %}">Import it instead</a> and its JSON, PDF, author
+    and version come across for you.
+</p>
+
 <form method="post" enctype="multipart/form-data">
     {% csrf_token %}
     <div class="d-flex flex-row">

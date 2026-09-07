@@ -40,6 +40,32 @@ def normalise_source(source):
     return f"{parsed.scheme}://{host}"
 
 
+def allowed_sources():
+    """The instances an ordinary uploader may import from, normalised."""
+    from django.conf import settings
+
+    configured = getattr(settings, "IMPORT_SOURCES", None) or [DEFAULT_SOURCE]
+    allowed = []
+    for source in configured:
+        try:
+            allowed.append(normalise_source(source))
+        except UpstreamError:
+            logger.warning("Ignoring unusable entry in IMPORT_SOURCES: %r", source)
+    return allowed or [DEFAULT_SOURCE]
+
+
+def may_import_from(source, user=None):
+    """Whether this user may pull from this instance.
+
+    The permission that guards the write API also lifts the source restriction; for
+    everyone else the source has to be one this instance has nominated, because the
+    fetch happens from the server rather than from the visitor's browser.
+    """
+    if user is not None and getattr(user, "is_authenticated", False) and user.has_perm("scripts.api_write_permission"):
+        return True
+    return normalise_source(source) in allowed_sources()
+
+
 def parse_reference(reference, default_source=DEFAULT_SOURCE):
     """Turn '134', a '/script/134' path, or a full URL into (source, script_id)."""
     reference = str(reference).strip()

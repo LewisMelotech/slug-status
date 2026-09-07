@@ -13,11 +13,9 @@
             <li class="nav-item">
                 <a class="nav-link" href="/script/upload">Upload</a>
             </li>
-            {% if perms.scripts.api_write_permission %}
             <li class="nav-item">
                 <a class="nav-link" href="{% url 'import_script' %}">Import</a>
             </li>
-            {% endif %}
             <li class="nav-item">
                 <a class="nav-link" href="/statistics">Statistics</a>
             </li>

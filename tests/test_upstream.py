@@ -153,7 +153,12 @@ def test_import_form_resolves_a_reference_and_defaults_to_linking():
 def test_import_form_takes_the_source_from_a_url():
     from scripts.forms import ScriptImportForm
 
-    form = ScriptImportForm(data={"reference": "http://botc-scripts:8000/script/7"})
+    # A privileged user, because that host is not one of the listed instances: this
+    # is testing that a link's own host wins, not who is allowed to use it.
+    form = ScriptImportForm(
+        data={"reference": "http://botc-scripts:8000/script/7"},
+        user=StubUser("scripts.api_write_permission"),
+    )
     assert form.is_valid(), form.errors
     assert form.cleaned_data["source"] == "http://botc-scripts:8000"
 
@@ -174,3 +179,52 @@ def test_import_is_a_reserved_slug():
 
     with pytest.raises(ValidationError):
         validate_script_slug("import")
+
+
+class StubUser:
+    """A user without touching the database."""
+
+    is_authenticated = True
+
+    def __init__(self, *permissions):
+        self.permissions = set(permissions)
+
+    def has_perm(self, permission):
+        return permission in self.permissions
+
+
+def test_ordinary_users_are_held_to_the_configured_sources():
+    from scripts.upstream import allowed_sources, may_import_from
+
+    allowed = allowed_sources()[0]
+    assert may_import_from(allowed, StubUser()) is True
+    # The cloud metadata endpoint stands in for anything on the server's own network.
+    assert may_import_from("http://169.254.169.254", StubUser()) is False
+    assert may_import_from("http://botc-scripts:8000", StubUser()) is False
+
+
+def test_the_write_permission_lifts_the_source_restriction():
+    from scripts.upstream import may_import_from
+
+    privileged = StubUser("scripts.api_write_permission")
+    assert may_import_from("http://169.254.169.254", privileged) is True
+    assert may_import_from("http://botc-scripts:8000", privileged) is True
+
+
+def test_the_form_refuses_an_unlisted_host_pasted_as_a_link():
+    from scripts.forms import ScriptImportForm
+
+    # The check has to run on the resolved source: the dropdown is not the only way
+    # to choose an instance, because a pasted link carries its own.
+    form = ScriptImportForm(data={"reference": "http://169.254.169.254/script/1"}, user=StubUser())
+    assert not form.is_valid()
+    assert "can only be imported from" in str(form.errors)
+
+
+def test_the_form_accepts_a_listed_host_for_an_ordinary_user():
+    from scripts.forms import ScriptImportForm
+    from scripts.upstream import allowed_sources
+
+    form = ScriptImportForm(data={"reference": f"{allowed_sources()[0]}/script/134"}, user=StubUser())
+    assert form.is_valid(), form.errors
+    assert form.cleaned_data["upstream_id"] == 134

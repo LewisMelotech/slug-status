@@ -75,16 +75,32 @@ not change often, and the public site is someone else's server:
 
 ## From the web UI
 
-**Import** appears in the site's navigation for anyone holding the
-`scripts.api_write_permission` permission, and lives at `/script/import`. Paste an id or
-a link, choose whether to take every version and whether to keep it linked, and submit —
-the imported script's page opens with a summary of what came across.
+**Import** sits in the site's navigation next to Upload, at `/script/import`, and the
+upload page links to it. Paste an id or a link, choose whether to take every version and
+whether to keep it linked, and submit — the imported script's page opens with a summary
+of what came across.
 
-It is gated more tightly than the upload page, which is open to anyone. Importing makes
-**the server** fetch a URL the visitor supplies, so leaving the form open would be a way
-to aim your server at anything it can reach, including addresses on your own network. The
-bot's API account already holds the permission; grant it to a person in the admin under
-their user's permissions.
+It is open to whoever may upload, including anonymous visitors, because importing a
+script someone else published is the same act as uploading it by hand.
+
+What is restricted is **where** it may be fetched from. The fetch runs on the server, not
+in the visitor's browser, so an unrestricted form would let anyone aim your server at any
+address it can reach — including services on your own network that are not exposed to the
+internet. So:
+
+- Anyone may import from the instances listed in `IMPORT_SOURCES`, which defaults to
+  `https://www.botcscripts.com`. Set it to a comma-separated list to allow more.
+- Holders of `scripts.api_write_permission` are not restricted, and get a free-text
+  source field. Your bot's API account already holds it; grant it to a person in the
+  admin under their user's permissions.
+
+The check runs against the **resolved** source rather than the dropdown, because a pasted
+link carries its own instance — validating only the field would let any host in through
+the reference box.
+
+There is no rate limiting on the form. On an instance open to the public internet, that
+means anyone can make your server fetch from an allowed source repeatedly; put it behind
+authentication or a proxy rate limit if that matters to you.
 
 ## Over the API
 

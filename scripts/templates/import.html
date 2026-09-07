@@ -10,6 +10,9 @@
 <p class="text-muted">
   Copies a script in from another botc-scripts instance — its JSON, its PDF where there
   is one, and its author and version. Nothing is ever sent back the other way.
+  {% if not unrestricted %}
+  Scripts can be imported from {{ import_sources|join:", " }}.
+  {% endif %}
 </p>
 
 <div class="col-md-6 col-lg-6 p-0">

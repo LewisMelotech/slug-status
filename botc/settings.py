@@ -198,6 +198,16 @@ LOCAL_SIGNUP_ENABLED = os.getenv("LOCAL_SIGNUP_ENABLED", "True") == "True"
 ACCOUNT_EMAIL_VERIFICATION = os.getenv("ACCOUNT_EMAIL_VERIFICATION", "none")
 EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
 
+# Instances that anyone allowed to upload may also import from. Holders of
+# scripts.api_write_permission are not held to this list; everybody else is, because
+# importing makes THIS server fetch a URL the visitor supplied, so an unrestricted
+# form open to all would be a way to aim it at anything the server can reach.
+IMPORT_SOURCES = [
+    source.strip()
+    for source in os.getenv("IMPORT_SOURCES", "https://www.botcscripts.com").split(",")
+    if source.strip()
+]
+
 # Allow CORS access to the API for GETs only.
 CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS", False) == "True"
 CORS_URLS_REGEX = r"^.*/api/.*$"

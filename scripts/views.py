@@ -9,7 +9,7 @@ import requests
 from django.contrib import messages
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import permission_required
-from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.models import User
 from django.contrib.postgres.search import TrigramSimilarity
 from django.db.models import Case, Count, F, Prefetch, When
@@ -1438,18 +1438,30 @@ def create_characters_and_determine_homebrew_status(script_content: dict, script
     return homebrewiness
 
 
-class ScriptImportView(LoginRequiredMixin, PermissionRequiredMixin, generic.FormView):
+class ScriptImportView(generic.FormView):
     """
     Import a script from another instance through the site.
 
-    Gated on the same permission as the import API rather than left open like the
-    upload page: this makes the server fetch a URL the visitor supplies, so an
-    anonymous form here would be a way to aim it at anything the server can reach.
+    Open to whoever may upload, because importing a script someone else published is
+    the same act as uploading it by hand. What stays restricted is WHERE it may be
+    fetched from: the fetch runs on the server, so anyone without
+    scripts.api_write_permission is held to settings.IMPORT_SOURCES, checked against
+    the resolved source rather than the field, since a pasted link carries its own.
     """
 
     template_name = "import.html"
     form_class = forms.ScriptImportForm
-    permission_required = "scripts.api_write_permission"
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["user"] = self.request.user
+        return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["import_sources"] = upstream.allowed_sources()
+        context["unrestricted"] = context["form"].unrestricted
+        return context
 
     def form_valid(self, form):
         try:
