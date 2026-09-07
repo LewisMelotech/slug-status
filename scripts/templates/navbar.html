@@ -19,6 +19,11 @@
             <li class="nav-item">
                 <a class="nav-link" href="/statistics">Statistics</a>
             </li>
+            {% if perms.scripts.moderate_scripts %}
+            <li class="nav-item">
+                <a class="nav-link" href="{% url 'moderation' %}">Review</a>
+            </li>
+            {% endif %}
             {% if user.is_authenticated %}
             <li class="nav-item dropdown">
                 <a class="nav-link dropdown-toggle" href="#" id="collectionDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">

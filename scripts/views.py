@@ -9,7 +9,7 @@ import requests
 from django.contrib import messages
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import permission_required
-from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
 from django.contrib.auth.models import User
 from django.contrib.postgres.search import TrigramSimilarity
 from django.db.models import Case, Count, F, Prefetch, When
@@ -18,10 +18,11 @@ from django.http import (
     Http404,
     HttpResponse,
     HttpResponseForbidden,
+    HttpResponseNotAllowed,
     HttpResponseRedirect,
     JsonResponse,
 )
-from django.shortcuts import redirect
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils.text import get_valid_filename
 from django.views import generic
@@ -35,6 +36,7 @@ from scripts import (
     filters,
     forms,
     models,
+    moderation,
     script_json,
     slugs,
     tables,
@@ -50,7 +52,7 @@ class ScriptsListView(SingleTableMixin, FilterView):
     script_view = None
 
     def get_queryset(self):
-        return (
+        return moderation.visible_versions(
             super()
             .get_queryset()
             .prefetch_related(
@@ -58,7 +60,8 @@ class ScriptsListView(SingleTableMixin, FilterView):
                     "tags",
                     queryset=models.ScriptTag.objects.all().order_by("order"),
                 )
-            )
+            ),
+            self.request.user,
         )
 
     def get_filterset_class(self):
@@ -96,7 +99,7 @@ class UserScriptsListView(LoginRequiredMixin, SingleTableMixin, FilterView):
             queryset = queryset.filter(script__favourites__user=self.request.user)
         elif self.script_view == "owned":
             queryset = queryset.filter(script__owner=self.request.user)
-        return queryset
+        return moderation.visible_versions(queryset, self.request.user)
 
     def get_filterset_kwargs(self, filterset_class):
         kwargs = super().get_filterset_kwargs(filterset_class)
@@ -192,10 +195,11 @@ class ScriptView(generic.DetailView):
         return super().get_object(queryset)
 
     def get_queryset(self):
-        return models.Script.objects.select_related("owner").prefetch_related(
+        user = self.request.user
+        return moderation.visible_scripts(models.Script.objects.select_related("owner"), user).prefetch_related(
             Prefetch(
                 "versions",
-                queryset=models.ScriptVersion.objects.prefetch_related("tags")
+                queryset=moderation.visible_versions(models.ScriptVersion.objects.prefetch_related("tags"), user)
                 .annotate(num_comments=Count("script__comments", distinct=True))
                 .order_by("-version"),
             ),
@@ -543,6 +547,7 @@ class ScriptUploadView(BaseScriptUploadView):
             num_travellers=num_travellers,
             edition=edition,
             homebrewiness=homebrewiness,
+            status=moderation.status_for_new_version(self.request.user),
         )
         if form.cleaned_data.get("notes", None):
             self.script_version.notes = form.cleaned_data["notes"]
@@ -626,6 +631,7 @@ class StatisticsView(generic.ListView, FilterView):
             queryset = models.ScriptVersion.objects.all()
         else:
             queryset = models.ScriptVersion.objects.filter(latest=True)
+        queryset = moderation.visible_versions(queryset, self.request.user)
         queryset = queryset.filter(homebrewiness=models.Homebrewiness.CLOCKTOWER)
 
         if self.request.user.is_authenticated:
@@ -642,7 +648,9 @@ class StatisticsView(generic.ListView, FilterView):
         elif "tags" in self.kwargs:
             tags = models.ScriptTag.objects.get(pk=self.kwargs.get("tags"))
             if tags:
-                queryset = models.ScriptVersion.objects.filter(tags__in=[tags])
+                queryset = moderation.visible_versions(
+                    models.ScriptVersion.objects.filter(tags__in=[tags]), self.request.user
+                )
 
         if "tags" in self.request.GET:
             try:
@@ -876,9 +884,18 @@ def json_file_response(name, script_version, content):
     return response
 
 
+def get_visible_version(request, pk: int, version: str):
+    """The version behind a download URL, or 404 when this user may not see it.
+
+    Downloads bypass every list and detail page, so an offline script would still be
+    fetchable by guessing its URL without this check.
+    """
+    script = get_object_or_404(moderation.visible_scripts(models.Script.objects.all(), request.user), pk=pk)
+    return script, get_object_or_404(moderation.visible_versions(script.versions.all(), request.user), version=version)
+
+
 def download_json(request, pk: int, version: str, language: str | None = None) -> FileResponse:
-    script = models.Script.objects.get(pk=pk)
-    script_version = script.versions.get(version=version)
+    script, script_version = get_visible_version(request, pk, version)
     content = translate_content(script_version.content, request, language)
     script.num_downloads = F("num_downloads") + 1
     script.save()
@@ -888,8 +905,7 @@ def download_json(request, pk: int, version: str, language: str | None = None) -
 
 @permission_required("scripts.download_unsupported_json")
 def download_unsupported_json(request, pk: int, version: str) -> FileResponse:
-    script = models.Script.objects.get(pk=pk)
-    script_version = script.versions.get(version=version)
+    script, script_version = get_visible_version(request, pk, version)
     content = []
     for character_json in script_version.content:
         if character_json.get("id") == "__meta":
@@ -909,8 +925,7 @@ def download_unsupported_json(request, pk: int, version: str) -> FileResponse:
 
 
 def download_pdf(request, pk: int, version: str) -> FileResponse:
-    script = models.Script.objects.get(pk=pk)
-    script_version = script.versions.get(version=version)
+    script, script_version = get_visible_version(request, pk, version)
     # Sanitize script name for safe filename
     safe_name = get_valid_filename(script.name)
     filename = f"{safe_name}_v{version}.pdf"
@@ -946,7 +961,9 @@ class CollectionScriptListView(SingleTableView):
 
     def get_queryset(self):
         collection = self.get_collection()
-        return collection.scripts.select_related("script").prefetch_related("tags").order_by("pk")
+        return moderation.visible_versions(
+            collection.scripts.select_related("script").prefetch_related("tags"), self.request.user
+        ).order_by("pk")
 
 
 class CollectionListView(SingleTableMixin, FilterView):
@@ -1143,8 +1160,10 @@ class AdvancedSearchResultsView(SingleTableView):
                 ids = data.get("queryset_pks", [])
                 order = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(ids)])
                 queryset = models.ScriptVersion.objects.filter(pk__in=ids).prefetch_related("tags").order_by(order)
-                return queryset
-        return models.ScriptVersion.objects.prefetch_related("tags").all()
+                return moderation.visible_versions(queryset, self.request.user)
+        return moderation.visible_versions(
+            models.ScriptVersion.objects.prefetch_related("tags").all(), self.request.user
+        )
 
     def get_table_class(self):
         if self.request.user.is_authenticated:
@@ -1470,6 +1489,7 @@ class ScriptImportView(generic.FormView):
                 source=form.cleaned_data["source"],
                 link=form.cleaned_data.get("link", False),
                 all_versions=form.cleaned_data.get("all_versions", False),
+                status=moderation.status_for_new_version(self.request.user),
             )
         except upstream.UpstreamError as exc:
             form.add_error("reference", str(exc))
@@ -1492,3 +1512,47 @@ class ScriptImportView(generic.FormView):
 
     def get_success_url(self):
         return reverse("script", kwargs={"pk": self.script.pk})
+
+
+class ModerationQueueView(LoginRequiredMixin, PermissionRequiredMixin, generic.ListView):
+    """The offline scripts waiting for a decision."""
+
+    template_name = "moderation.html"
+    context_object_name = "versions"
+    permission_required = moderation.MODERATE
+    paginate_by = 25
+
+    def get_queryset(self):
+        return (
+            models.ScriptVersion.objects.filter(status=models.ScriptStatus.OFFLINE)
+            .select_related("script", "script__owner")
+            .order_by("created")
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["online_count"] = models.ScriptVersion.objects.filter(status=models.ScriptStatus.ONLINE).count()
+        return context
+
+
+@permission_required(moderation.MODERATE)
+def set_script_status(request, pk: int):
+    """Put one version online or take it offline again.
+
+    POST only: this changes what the public can see, so it must not be reachable by
+    following a link, being linked to from elsewhere, or being prefetched.
+    """
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+
+    version = get_object_or_404(models.ScriptVersion.objects, pk=pk)
+    requested = request.POST.get("status")
+    if requested not in models.ScriptStatus.values:
+        messages.error(request, f"'{requested}' is not a status.")
+    else:
+        version.status = requested
+        version.save(update_fields=["status"])
+        wording = "online" if requested == models.ScriptStatus.ONLINE else "offline"
+        messages.success(request, f"{version.script.name} v{version.version} is now {wording}.")
+
+    return redirect(request.POST.get("next") or "moderation")

@@ -56,6 +56,19 @@ class Homebrewiness(models.IntegerChoices):
     HOMEBREW = 2, "Homebrew"
 
 
+class ScriptStatus(models.TextChoices):
+    """Whether a version is published.
+
+    Uploads and imports land OFFLINE and stay invisible to everyone but their owner
+    and a moderator until someone with scripts.moderate_scripts puts them ONLINE. A
+    moderator's own upload skips the queue, since asking them to approve themselves
+    achieves nothing.
+    """
+
+    OFFLINE = "offline", "Offline — awaiting review"
+    ONLINE = "online", "Online — visible to everyone"
+
+
 class ScriptTag(models.Model):
     """
     Tags that can be applied to a script.
@@ -185,6 +198,13 @@ class ScriptVersion(models.Model):
     tags = models.ManyToManyField(ScriptTag, blank=True)
     edition = models.IntegerField(choices=Edition.choices, default=Edition.ALL)
     homebrewiness = models.IntegerField(choices=Homebrewiness.choices, default=Homebrewiness.CLOCKTOWER)
+    status = models.CharField(
+        max_length=10,
+        choices=ScriptStatus.choices,
+        default=ScriptStatus.OFFLINE,
+        db_index=True,
+        help_text="Offline versions are hidden from everyone but their owner and moderators.",
+    )
 
     objects = ScriptViewManager()
     plain_objects = models.Manager()
@@ -201,6 +221,10 @@ class ScriptVersion(models.Model):
             (
                 "api_write_permission",
                 "Can create, update or delete scripts via the API. This is not required for reading scripts.",
+            ),
+            (
+                "moderate_scripts",
+                "Can put uploaded scripts online, and see offline ones. Uploads by this user skip the queue.",
             ),
         ]
         indexes = [

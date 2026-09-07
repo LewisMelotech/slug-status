@@ -102,6 +102,19 @@
         <a class="badge badge-pill badge-secondary" href="{% url 'script_by_slug' script.slug %}" title="Short link for this script">/script/{{ script.slug }}</a>
     </div>
     {% endif %}
+    {% if script_version.status != 'online' %}
+    <div class="col-auto align-self-end pb-2">
+        <span class="badge badge-pill badge-warning" title="Only you and the moderators can see this version">Offline — awaiting review</span>
+        {% if perms.scripts.moderate_scripts %}
+        <form method="post" action="{% url 'set_script_status' pk=script_version.pk %}" class="d-inline m-0 ml-1">
+            {% csrf_token %}
+            <input type="hidden" name="status" value="online">
+            <input type="hidden" name="next" value="{{ request.get_full_path }}">
+            <button type="submit" class="btn btn-sm btn-success py-0">Put online</button>
+        </form>
+        {% endif %}
+    </div>
+    {% endif %}
     <div class="col-auto ml-auto align-self-end">
         {% include "info.html" with record=script_version %}
     </div>

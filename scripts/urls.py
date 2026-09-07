@@ -124,6 +124,8 @@ urlpatterns = [
     path("script/search/results", views.AdvancedSearchResultsView.as_view()),
     path("script/upload", views.ScriptUploadView.as_view(), name="upload"),
     path("script/import", views.ScriptImportView.as_view(), name="import_script"),
+    path("moderation", views.ModerationQueueView.as_view(), name="moderation"),
+    path("moderation/<int:pk>/status", views.set_script_status, name="set_script_status"),
     # Slug routes must come LAST in the script/ block. Django's slug converter
     # matches [-a-zA-Z0-9_]+, which also matches "123", "search", "upload" and
     # "all_roles", so a slug pattern registered any earlier would swallow the

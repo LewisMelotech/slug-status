@@ -56,8 +56,26 @@ class ScriptAdmin(admin.ModelAdmin):
             self.message_user(request, f"{synced} new version(s) in total.", level=messages.SUCCESS)
 
 
+@admin.action(description="Put selected versions online")
+def put_online(modeladmin, request, queryset):
+    updated = queryset.update(status=models.ScriptStatus.ONLINE)
+    modeladmin.message_user(request, f"{updated} version(s) are now online.", level=messages.SUCCESS)
+
+
+@admin.action(description="Take selected versions offline")
+def take_offline(modeladmin, request, queryset):
+    updated = queryset.update(status=models.ScriptStatus.OFFLINE)
+    modeladmin.message_user(request, f"{updated} version(s) are now offline.", level=messages.SUCCESS)
+
+
 class ScriptVersionAdmin(admin.ModelAdmin):
     readonly_fields = ["created"]
+    list_display = ["pk", "script", "version", "status", "latest", "author", "created"]
+    list_display_links = ["pk", "script"]
+    list_editable = ["status"]
+    list_filter = ["status", "latest", "script_type"]
+    search_fields = ["script__name", "author"]
+    actions = [put_online, take_offline]
 
 
 admin.site.register(models.ClocktowerCharacter)
