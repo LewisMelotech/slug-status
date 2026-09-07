@@ -1,0 +1,22 @@
+# Keep secrets, host-specific state and build noise out of the image.
+.env
+.env.*
+botc/local.py
+
+.git
+.github
+.devcontainer
+.venv
+venv
+.pytest_cache
+.ruff_cache
+.mypy_cache
+__pycache__
+*.py[cod]
+
+# Rebuilt inside the image by collectstatic.
+staticfiles/
+
+db.sqlite3
+*.log
+.DS_Store
