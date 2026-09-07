@@ -4,7 +4,7 @@ from drf_spectacular.utils import extend_schema
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from scripts import models, moderation
+from scripts import models
 
 
 @extend_schema(
@@ -27,7 +27,6 @@ class StatisticsAPI(APIView):
             queryset = models.ScriptVersion.objects.all()
         else:
             queryset = models.ScriptVersion.objects.filter(latest=True)
-        queryset = moderation.visible_versions(queryset, request.user)
 
         for param in request.query_params.lists():
             if param[0] == "character":

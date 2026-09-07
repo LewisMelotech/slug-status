@@ -19,35 +19,11 @@
             <li class="nav-item">
                 <a class="nav-link" href="/statistics">Statistics</a>
             </li>
-            {% if perms.scripts.moderate_scripts %}
+            {% if perms.scripts.set_server_status %}
             <li class="nav-item">
-                <a class="nav-link" href="{% url 'moderation' %}">Review</a>
+                <a class="nav-link" href="{% url 'server_queue' %}">Server</a>
             </li>
             {% endif %}
-            {% if user.is_authenticated %}
-            <li class="nav-item dropdown">
-                <a class="nav-link dropdown-toggle" href="#" id="collectionDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                    Collections
-                </a>
-                <div class="dropdown-menu" aria-labelledby="collectionDropdown">
-                    <a class="dropdown-item" href="/collections">View</a>
-                    <a class="dropdown-item" href="/collection/new">New</a>
-                </div>
-            </li>
-            {% else %}
-            <li class="nav-item">
-                <a class="nav-link" href="/collections">Collections</a>
-            </li>
-            {% endif %}
-            <li class="nav-item dropdown">
-                <a class="nav-link dropdown-toggle" href="#" id="worldcupDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                    🏆 World Cup
-                </a>
-                <div class="dropdown-menu" aria-labelledby="worldcupDropdown">
-                    <a class="dropdown-item" href="/worldcup">Results</a>
-                    <a class="dropdown-item" href="/worldcup/statistics">Statistics</a>
-                </div>
-            </li>
             <li class="nav-item dropdown">
                 <a class="nav-link dropdown-toggle" href="#" id="scriptDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
                     Special Scripts

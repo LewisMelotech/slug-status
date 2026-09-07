@@ -1,22 +1,6 @@
 from django.db import migrations, models
 
 
-def publish_existing_versions(apps, schema_editor):
-    """Everything already here predates moderation, so it stays visible.
-
-    Without this the field default would take every existing script offline the
-    moment this migration ran, which on an instance in use looks like data loss.
-    """
-    ScriptVersion = apps.get_model("scripts", "ScriptVersion")
-    ScriptVersion.objects.update(status="online")
-
-
-def unpublish_all_versions(apps, schema_editor):
-    """Reversing cannot know which were online before, so return to the default."""
-    ScriptVersion = apps.get_model("scripts", "ScriptVersion")
-    ScriptVersion.objects.update(status="offline")
-
-
 class Migration(migrations.Migration):
     dependencies = [
         ("scripts", "0049_script_upstream_link"),
@@ -28,12 +12,14 @@ class Migration(migrations.Migration):
             name="status",
             field=models.CharField(
                 choices=[
-                    ("offline", "Offline — awaiting review"),
-                    ("online", "Online — visible to everyone"),
+                    ("offline", "Offline — not on the Minecraft server"),
+                    ("online", "Online — live on the Minecraft server"),
                 ],
                 db_index=True,
                 default="offline",
-                help_text="Offline versions are hidden from everyone but their owner and moderators.",
+                help_text=(
+                    "Whether this version is live on the Minecraft server. Does not affect visibility here."
+                ),
                 max_length=10,
             ),
         ),
@@ -50,11 +36,12 @@ class Migration(migrations.Migration):
                         "Can create, update or delete scripts via the API. This is not required for reading scripts.",
                     ),
                     (
-                        "moderate_scripts",
-                        "Can put uploaded scripts online, and see offline ones. Uploads by this user skip the queue.",
+                        "set_server_status",
+                        "Can mark a script as live on the Minecraft server, or take it back off.",
                     ),
                 ]
             },
         ),
-        migrations.RunPython(publish_existing_versions, unpublish_all_versions),
+        # No backfill: nothing here has been put on the Minecraft server yet, so the
+        # field default is the honest starting point for existing rows too.
     ]

@@ -36,8 +36,9 @@ from scripts import (
     filters,
     forms,
     models,
-    moderation,
     script_json,
+    serializers,
+    server_status,
     slugs,
     tables,
     upstream,
@@ -52,7 +53,7 @@ class ScriptsListView(SingleTableMixin, FilterView):
     script_view = None
 
     def get_queryset(self):
-        return moderation.visible_versions(
+        return (
             super()
             .get_queryset()
             .prefetch_related(
@@ -60,8 +61,7 @@ class ScriptsListView(SingleTableMixin, FilterView):
                     "tags",
                     queryset=models.ScriptTag.objects.all().order_by("order"),
                 )
-            ),
-            self.request.user,
+            )
         )
 
     def get_filterset_class(self):
@@ -99,7 +99,7 @@ class UserScriptsListView(LoginRequiredMixin, SingleTableMixin, FilterView):
             queryset = queryset.filter(script__favourites__user=self.request.user)
         elif self.script_view == "owned":
             queryset = queryset.filter(script__owner=self.request.user)
-        return moderation.visible_versions(queryset, self.request.user)
+        return queryset
 
     def get_filterset_kwargs(self, filterset_class):
         kwargs = super().get_filterset_kwargs(filterset_class)
@@ -195,11 +195,10 @@ class ScriptView(generic.DetailView):
         return super().get_object(queryset)
 
     def get_queryset(self):
-        user = self.request.user
-        return moderation.visible_scripts(models.Script.objects.select_related("owner"), user).prefetch_related(
+        return models.Script.objects.select_related("owner").prefetch_related(
             Prefetch(
                 "versions",
-                queryset=moderation.visible_versions(models.ScriptVersion.objects.prefetch_related("tags"), user)
+                queryset=models.ScriptVersion.objects.prefetch_related("tags")
                 .annotate(num_comments=Count("script__comments", distinct=True))
                 .order_by("-version"),
             ),
@@ -547,7 +546,6 @@ class ScriptUploadView(BaseScriptUploadView):
             num_travellers=num_travellers,
             edition=edition,
             homebrewiness=homebrewiness,
-            status=moderation.status_for_new_version(self.request.user),
         )
         if form.cleaned_data.get("notes", None):
             self.script_version.notes = form.cleaned_data["notes"]
@@ -631,7 +629,6 @@ class StatisticsView(generic.ListView, FilterView):
             queryset = models.ScriptVersion.objects.all()
         else:
             queryset = models.ScriptVersion.objects.filter(latest=True)
-        queryset = moderation.visible_versions(queryset, self.request.user)
         queryset = queryset.filter(homebrewiness=models.Homebrewiness.CLOCKTOWER)
 
         if self.request.user.is_authenticated:
@@ -648,9 +645,7 @@ class StatisticsView(generic.ListView, FilterView):
         elif "tags" in self.kwargs:
             tags = models.ScriptTag.objects.get(pk=self.kwargs.get("tags"))
             if tags:
-                queryset = moderation.visible_versions(
-                    models.ScriptVersion.objects.filter(tags__in=[tags]), self.request.user
-                )
+                queryset = models.ScriptVersion.objects.filter(tags__in=[tags])
 
         if "tags" in self.request.GET:
             try:
@@ -884,18 +879,9 @@ def json_file_response(name, script_version, content):
     return response
 
 
-def get_visible_version(request, pk: int, version: str):
-    """The version behind a download URL, or 404 when this user may not see it.
-
-    Downloads bypass every list and detail page, so an offline script would still be
-    fetchable by guessing its URL without this check.
-    """
-    script = get_object_or_404(moderation.visible_scripts(models.Script.objects.all(), request.user), pk=pk)
-    return script, get_object_or_404(moderation.visible_versions(script.versions.all(), request.user), version=version)
-
-
 def download_json(request, pk: int, version: str, language: str | None = None) -> FileResponse:
-    script, script_version = get_visible_version(request, pk, version)
+    script = models.Script.objects.get(pk=pk)
+    script_version = script.versions.get(version=version)
     content = translate_content(script_version.content, request, language)
     script.num_downloads = F("num_downloads") + 1
     script.save()
@@ -905,7 +891,8 @@ def download_json(request, pk: int, version: str, language: str | None = None) -
 
 @permission_required("scripts.download_unsupported_json")
 def download_unsupported_json(request, pk: int, version: str) -> FileResponse:
-    script, script_version = get_visible_version(request, pk, version)
+    script = models.Script.objects.get(pk=pk)
+    script_version = script.versions.get(version=version)
     content = []
     for character_json in script_version.content:
         if character_json.get("id") == "__meta":
@@ -925,7 +912,8 @@ def download_unsupported_json(request, pk: int, version: str) -> FileResponse:
 
 
 def download_pdf(request, pk: int, version: str) -> FileResponse:
-    script, script_version = get_visible_version(request, pk, version)
+    script = models.Script.objects.get(pk=pk)
+    script_version = script.versions.get(version=version)
     # Sanitize script name for safe filename
     safe_name = get_valid_filename(script.name)
     filename = f"{safe_name}_v{version}.pdf"
@@ -961,9 +949,7 @@ class CollectionScriptListView(SingleTableView):
 
     def get_queryset(self):
         collection = self.get_collection()
-        return moderation.visible_versions(
-            collection.scripts.select_related("script").prefetch_related("tags"), self.request.user
-        ).order_by("pk")
+        return collection.scripts.select_related("script").prefetch_related("tags").order_by("pk")
 
 
 class CollectionListView(SingleTableMixin, FilterView):
@@ -1160,10 +1146,8 @@ class AdvancedSearchResultsView(SingleTableView):
                 ids = data.get("queryset_pks", [])
                 order = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(ids)])
                 queryset = models.ScriptVersion.objects.filter(pk__in=ids).prefetch_related("tags").order_by(order)
-                return moderation.visible_versions(queryset, self.request.user)
-        return moderation.visible_versions(
-            models.ScriptVersion.objects.prefetch_related("tags").all(), self.request.user
-        )
+                return queryset
+        return models.ScriptVersion.objects.prefetch_related("tags").all()
 
     def get_table_class(self):
         if self.request.user.is_authenticated:
@@ -1489,7 +1473,6 @@ class ScriptImportView(generic.FormView):
                 source=form.cleaned_data["source"],
                 link=form.cleaned_data.get("link", False),
                 all_versions=form.cleaned_data.get("all_versions", False),
-                status=moderation.status_for_new_version(self.request.user),
             )
         except upstream.UpstreamError as exc:
             form.add_error("reference", str(exc))
@@ -1514,12 +1497,12 @@ class ScriptImportView(generic.FormView):
         return reverse("script", kwargs={"pk": self.script.pk})
 
 
-class ModerationQueueView(LoginRequiredMixin, PermissionRequiredMixin, generic.ListView):
-    """The offline scripts waiting for a decision."""
+class ServerQueueView(LoginRequiredMixin, PermissionRequiredMixin, generic.ListView):
+    """Scripts not yet marked as live on the Minecraft server."""
 
-    template_name = "moderation.html"
+    template_name = "server_queue.html"
     context_object_name = "versions"
-    permission_required = moderation.MODERATE
+    permission_required = server_status.SET_STATUS
     paginate_by = 25
 
     def get_queryset(self):
@@ -1535,12 +1518,12 @@ class ModerationQueueView(LoginRequiredMixin, PermissionRequiredMixin, generic.L
         return context
 
 
-@permission_required(moderation.MODERATE)
+@permission_required(server_status.SET_STATUS)
 def set_script_status(request, pk: int):
-    """Put one version online or take it offline again.
+    """Mark one version as live on the Minecraft server, or take it back off.
 
-    POST only: this changes what the public can see, so it must not be reachable by
-    following a link, being linked to from elsewhere, or being prefetched.
+    POST only, so the status cannot be flipped by following a link or having one
+    prefetched.
     """
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
@@ -1552,7 +1535,32 @@ def set_script_status(request, pk: int):
     else:
         version.status = requested
         version.save(update_fields=["status"])
-        wording = "online" if requested == models.ScriptStatus.ONLINE else "offline"
-        messages.success(request, f"{version.script.name} v{version.version} is now {wording}.")
+        wording = "live on the server" if requested == models.ScriptStatus.ONLINE else "off the server"
+        messages.success(request, f"{version.script.name} v{version.version} is now marked {wording}.")
 
-    return redirect(request.POST.get("next") or "moderation")
+    return redirect(request.POST.get("next") or "server_queue")
+
+
+@permission_required("scripts.api_write_permission")
+def set_script_slug(request, pk: int):
+    """Set or clear a script's custom id from the script page.
+
+    POST only, and validated through the same serializer field the API uses, so the
+    site and the API cannot disagree about what a valid slug is.
+    """
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+
+    script = get_object_or_404(models.Script.objects, pk=pk)
+    serializer = serializers.ScriptSlugSerializer(script, data={"slug": request.POST.get("slug", "")})
+    if serializer.is_valid():
+        serializer.save()
+        if script.slug:
+            messages.success(request, f"{script.name} can now be reached as /script/{script.slug}.")
+        else:
+            messages.success(request, f"{script.name} no longer has a custom id.")
+    else:
+        for error in serializer.errors.get("slug", ["That custom id could not be used."]):
+            messages.error(request, str(error))
+
+    return redirect(request.POST.get("next") or reverse("script", kwargs={"pk": script.pk}))

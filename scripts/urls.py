@@ -93,6 +93,9 @@ urlpatterns = [
         name="favourite",
     ),
     path("script/<int:pk>", views.ScriptView.as_view(), name="script"),
+    # Ahead of script/<int:pk>/<str:version>, which would otherwise capture this with
+    # version="slug" and never reach the view.
+    path("script/<int:pk>/slug", views.set_script_slug, name="set_script_slug"),
     path(
         "script/<int:pk>/<str:version>/similar",
         views.get_similar_scripts,
@@ -124,8 +127,8 @@ urlpatterns = [
     path("script/search/results", views.AdvancedSearchResultsView.as_view()),
     path("script/upload", views.ScriptUploadView.as_view(), name="upload"),
     path("script/import", views.ScriptImportView.as_view(), name="import_script"),
-    path("moderation", views.ModerationQueueView.as_view(), name="moderation"),
-    path("moderation/<int:pk>/status", views.set_script_status, name="set_script_status"),
+    path("server", views.ServerQueueView.as_view(), name="server_queue"),
+    path("server/<int:pk>/status", views.set_script_status, name="set_script_status"),
     # Slug routes must come LAST in the script/ block. Django's slug converter
     # matches [-a-zA-Z0-9_]+, which also matches "123", "search", "upload" and
     # "all_roles", so a slug pattern registered any earlier would swallow the

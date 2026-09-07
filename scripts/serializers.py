@@ -91,7 +91,21 @@ class VersionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = models.ScriptVersion
-        fields = ["pk", "script_id", "name", "slug", "version", "script_type", "author", "content", "score"]
+        # status is read-only here: it says whether this version is on the Minecraft
+        # server, and it is set from the site or the admin, never by an upload.
+        fields = [
+            "pk",
+            "script_id",
+            "name",
+            "slug",
+            "version",
+            "script_type",
+            "author",
+            "content",
+            "score",
+            "status",
+        ]
+        read_only_fields = ["status"]
 
 
 class ScriptSlugSerializer(serializers.ModelSerializer):

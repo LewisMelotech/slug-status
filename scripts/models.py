@@ -57,16 +57,15 @@ class Homebrewiness(models.IntegerChoices):
 
 
 class ScriptStatus(models.TextChoices):
-    """Whether a version is published.
+    """Whether this version is live on the Minecraft server.
 
-    Uploads and imports land OFFLINE and stay invisible to everyone but their owner
-    and a moderator until someone with scripts.moderate_scripts puts them ONLINE. A
-    moderator's own upload skips the queue, since asking them to approve themselves
-    achieves nothing.
+    Purely a record of what has been deployed there — it does not affect who can see
+    or download a script here. Everything uploaded starts OFFLINE, and someone holding
+    scripts.set_server_status marks it ONLINE once it is actually on the server.
     """
 
-    OFFLINE = "offline", "Offline — awaiting review"
-    ONLINE = "online", "Online — visible to everyone"
+    OFFLINE = "offline", "Offline — not on the Minecraft server"
+    ONLINE = "online", "Online — live on the Minecraft server"
 
 
 class ScriptTag(models.Model):
@@ -203,7 +202,7 @@ class ScriptVersion(models.Model):
         choices=ScriptStatus.choices,
         default=ScriptStatus.OFFLINE,
         db_index=True,
-        help_text="Offline versions are hidden from everyone but their owner and moderators.",
+        help_text="Whether this version is live on the Minecraft server. Does not affect visibility here.",
     )
 
     objects = ScriptViewManager()
@@ -223,8 +222,8 @@ class ScriptVersion(models.Model):
                 "Can create, update or delete scripts via the API. This is not required for reading scripts.",
             ),
             (
-                "moderate_scripts",
-                "Can put uploaded scripts online, and see offline ones. Uploads by this user skip the queue.",
+                "set_server_status",
+                "Can mark a script as live on the Minecraft server, or take it back off.",
             ),
         ]
         indexes = [

@@ -12,7 +12,7 @@ from rest_framework.response import Response
 from versionfield import Version
 
 from scripts import filters as filtersets
-from scripts import models, moderation, script_json, serializers, slugs, upstream
+from scripts import models, script_json, serializers, slugs, upstream
 from scripts.views import (
     calculate_edition,
     count_character,
@@ -57,9 +57,6 @@ class ScriptViewSet(viewsets.ReadOnlyModelViewSet):
     ordering_fields = ["pk"]
     ordering = ["-pk"]
 
-    def get_queryset(self):
-        return moderation.visible_scripts(super().get_queryset(), self.request.user)
-
     def get_permissions(self):
         # Reads stay open, exactly as before. The slug write has to be named
         # explicitly: this viewset declares no permission_classes of its own, so
@@ -95,7 +92,6 @@ class ScriptViewSet(viewsets.ReadOnlyModelViewSet):
                 source=data["source"],
                 link=data["link"],
                 all_versions=data["all_versions"],
-                status=moderation.status_for_new_version(request.user),
             )
         except upstream.UpstreamError as exc:
             # The far side being unreachable, missing the script, or answering with
@@ -161,10 +157,7 @@ class VersionViewSet(viewsets.ModelViewSet):
     pagination_class = ScriptPagination
 
     def get_queryset(self):
-        return moderation.visible_versions(
-            models.ScriptVersion.plain_objects.annotate(score=Count("script__votes", distinct=True)),
-            self.request.user,
-        )
+        return models.ScriptVersion.plain_objects.annotate(score=Count("script__votes", distinct=True))
 
     def filter_queryset(self, queryset):
         # Retrieving a single script by pk should never be filtered, e.g. by "latest".
@@ -255,7 +248,6 @@ class VersionViewSet(viewsets.ModelViewSet):
             num_travellers=num_travellers,
             edition=edition,
             homebrewiness=homebrewiness,
-            status=moderation.status_for_new_version(request.user),
         )
         if serializer.validated_data.get("notes", None):
             self.script_version.notes = serializer.validated_data.get("notes")

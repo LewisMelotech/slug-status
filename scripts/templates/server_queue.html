@@ -4,12 +4,13 @@
 
 {% block content %}
 
-<h4>{% trans 'Scripts awaiting review' %}</h4>
+<h4>{% trans 'Not yet on the Minecraft server' %}</h4>
 
 <p class="text-muted">
-  Uploads and imports start offline and are visible only to whoever added them, until
-  they are put online here. {{ online_count }} script version{{ online_count|pluralize }}
-  {{ online_count|pluralize:"is,are" }} currently online.
+  Everything uploaded here starts offline and is marked online once it has actually been
+  put on the Minecraft server. This is a record of what has been deployed — every script
+  stays visible and downloadable either way. {{ online_count }} version{{ online_count|pluralize }}
+  {{ online_count|pluralize:"is,are" }} currently marked online.
 </p>
 
 {% if versions %}
@@ -22,8 +23,8 @@
         <th>Author</th>
         <th>Added by</th>
         <th>Added</th>
-        <th>PDF</th>
-        <th class="text-right">Decision</th>
+        <th>Files</th>
+        <th class="text-right">Server</th>
       </tr>
     </thead>
     <tbody>
@@ -35,10 +36,9 @@
         <td>{{ version.script.owner|default:"anonymous" }}</td>
         <td>{{ version.created|date:"j M Y, H:i" }}</td>
         <td>
+          <a href="{% url 'download_json' pk=version.script.pk version=version.version %}">JSON</a>
           {% if version.pdf %}
-            <a href="{% url 'download_pdf' pk=version.script.pk version=version.version %}">PDF</a>
-          {% else %}
-            —
+            · <a href="{% url 'download_pdf' pk=version.script.pk version=version.version %}">PDF</a>
           {% endif %}
         </td>
         <td class="text-right">
@@ -46,7 +46,7 @@
             {% csrf_token %}
             <input type="hidden" name="status" value="online">
             <input type="hidden" name="next" value="{{ request.get_full_path }}">
-            <button type="submit" class="btn btn-sm btn-success">{% trans 'Put online' %}</button>
+            <button type="submit" class="btn btn-sm btn-success">{% trans 'Mark online' %}</button>
           </form>
         </td>
       </tr>
@@ -70,7 +70,7 @@
 {% endif %}
 
 {% else %}
-<p>Nothing is waiting. Every script here is online.</p>
+<p>Nothing waiting — every version here is marked as live on the server.</p>
 {% endif %}
 
 {% endblock %}

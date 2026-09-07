@@ -56,16 +56,16 @@ class ScriptAdmin(admin.ModelAdmin):
             self.message_user(request, f"{synced} new version(s) in total.", level=messages.SUCCESS)
 
 
-@admin.action(description="Put selected versions online")
-def put_online(modeladmin, request, queryset):
+@admin.action(description="Mark selected versions as live on the Minecraft server")
+def mark_on_server(modeladmin, request, queryset):
     updated = queryset.update(status=models.ScriptStatus.ONLINE)
-    modeladmin.message_user(request, f"{updated} version(s) are now online.", level=messages.SUCCESS)
+    modeladmin.message_user(request, f"{updated} version(s) marked online.", level=messages.SUCCESS)
 
 
-@admin.action(description="Take selected versions offline")
-def take_offline(modeladmin, request, queryset):
+@admin.action(description="Mark selected versions as not on the Minecraft server")
+def mark_off_server(modeladmin, request, queryset):
     updated = queryset.update(status=models.ScriptStatus.OFFLINE)
-    modeladmin.message_user(request, f"{updated} version(s) are now offline.", level=messages.SUCCESS)
+    modeladmin.message_user(request, f"{updated} version(s) marked offline.", level=messages.SUCCESS)
 
 
 class ScriptVersionAdmin(admin.ModelAdmin):
@@ -75,7 +75,7 @@ class ScriptVersionAdmin(admin.ModelAdmin):
     list_editable = ["status"]
     list_filter = ["status", "latest", "script_type"]
     search_fields = ["script__name", "author"]
-    actions = [put_online, take_offline]
+    actions = [mark_on_server, mark_off_server]
 
 
 admin.site.register(models.ClocktowerCharacter)

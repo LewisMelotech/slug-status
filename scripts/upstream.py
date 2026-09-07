@@ -178,7 +178,7 @@ def _target_script(source, upstream_id, name):
 
 
 @transaction.atomic
-def import_version(source, row, pdf=None, link=True, status=None):
+def import_version(source, row, pdf=None, link=True):
     """Create one ScriptVersion from an upstream version row.
 
     Returns the new ScriptVersion, or None when that version is already held locally.
@@ -227,7 +227,6 @@ def import_version(source, row, pdf=None, link=True, status=None):
         latest=is_latest,
         edition=calculate_edition(content),
         homebrewiness=homebrewiness,
-        status=status or models.ScriptStatus.ONLINE,
         **_counts(content),
     )
 
@@ -239,7 +238,7 @@ def import_version(source, row, pdf=None, link=True, status=None):
     return script_version
 
 
-def import_script(reference, source=DEFAULT_SOURCE, link=True, all_versions=False, client=None, status=None):
+def import_script(reference, source=DEFAULT_SOURCE, link=True, all_versions=False, client=None):
     """Import a script from upstream by id or URL.
 
     Returns (script, imported, skipped) where imported is the list of ScriptVersions
@@ -258,7 +257,7 @@ def import_script(reference, source=DEFAULT_SOURCE, link=True, all_versions=Fals
     for version_number, url in wanted:
         row = client.version(url)
         pdf = client.pdf(upstream_id, row.get("version") or version_number)
-        created = import_version(source, row, pdf=pdf, link=link, status=status)
+        created = import_version(source, row, pdf=pdf, link=link)
         if created is None:
             skipped += 1
             logger.info("Already held %s %s from %s", detail.get("name"), version_number, source)
