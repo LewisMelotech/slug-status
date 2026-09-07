@@ -73,6 +73,19 @@ not change often, and the public site is someone else's server:
 0 4 * * * cd /path/to/discord-botc-script-bot/stack && docker compose exec -T botc-scripts python manage.py sync_upstream
 ```
 
+## From the web UI
+
+**Import** appears in the site's navigation for anyone holding the
+`scripts.api_write_permission` permission, and lives at `/script/import`. Paste an id or
+a link, choose whether to take every version and whether to keep it linked, and submit —
+the imported script's page opens with a summary of what came across.
+
+It is gated more tightly than the upload page, which is open to anyone. Importing makes
+**the server** fetch a URL the visitor supplies, so leaving the form open would be a way
+to aim your server at anything it can reach, including addresses on your own network. The
+bot's API account already holds the permission; grant it to a person in the admin under
+their user's permissions.
+
 ## Over the API
 
 `POST /api/script_ids/import/` does the same job as `import_script`, so a Discord bot or

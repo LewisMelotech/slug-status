@@ -9,7 +9,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import FileExtensionValidator
 from versionfield import Version
 
-from scripts import constants, models, script_json, validators, widgets
+from scripts import constants, models, script_json, upstream, validators, widgets
 
 
 def tagOptions():
@@ -234,3 +234,39 @@ class UpdateDatabaseForm(forms.Form):
             raise ValidationError(
                 f"Trying to update database entries that don't exist. There are {models.ScriptVersion.objects.count()} scripts in the database"
             )
+
+
+class ScriptImportForm(forms.Form):
+    reference = forms.CharField(
+        label="Script id or link",
+        help_text="A script id, or a link to its page, e.g. https://www.botcscripts.com/script/134",
+        widget=forms.TextInput(attrs={"placeholder": "134 or https://www.botcscripts.com/script/134"}),
+    )
+    source = forms.CharField(
+        label="Instance to import from",
+        required=False,
+        help_text=f"Leave blank for {upstream.DEFAULT_SOURCE}. Only used when an id is given without a link.",
+    )
+    all_versions = forms.BooleanField(
+        label="Import every version",
+        required=False,
+        help_text="Off imports only the latest version.",
+    )
+    link = forms.BooleanField(
+        label="Keep it linked",
+        required=False,
+        initial=True,
+        help_text="Pull new versions from the source whenever sync_upstream runs.",
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        reference = cleaned.get("reference")
+        if not reference:
+            return cleaned
+        source = cleaned.get("source") or upstream.DEFAULT_SOURCE
+        try:
+            cleaned["source"], cleaned["upstream_id"] = upstream.parse_reference(reference, source)
+        except upstream.UpstreamError as exc:
+            raise ValidationError({"reference": str(exc)}) from exc
+        return cleaned

@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+
+{% load bootstrap4 %}
+{% load i18n %}
+
+{% block content %}
+
+<h4>{% trans 'Import a script' %}</h4>
+
+<p class="text-muted">
+  Copies a script in from another botc-scripts instance — its JSON, its PDF where there
+  is one, and its author and version. Nothing is ever sent back the other way.
+</p>
+
+<div class="col-md-6 col-lg-6 p-0">
+  <form method="post">
+    {% csrf_token %}
+    {% bootstrap_form form %}
+    {% buttons %}
+      <button type="submit" class="btn btn-primary">{% trans 'Import' %}</button>
+    {% endbuttons %}
+  </form>
+</div>
+
+{% endblock %}

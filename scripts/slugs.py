@@ -40,6 +40,7 @@ RESERVED_SLUGS = frozenset(
     {
         # script/... routes
         "all-roles",
+        "import",
         "search",
         "upload",
         # action segments that follow a script

@@ -139,3 +139,38 @@ def test_import_serializer_rejects_a_reference_without_an_id(reference):
     serializer = ScriptImportSerializer(data={"reference": reference})
     assert not serializer.is_valid()
     assert "reference" in serializer.errors
+
+
+def test_import_form_resolves_a_reference_and_defaults_to_linking():
+    from scripts.forms import ScriptImportForm
+
+    form = ScriptImportForm(data={"reference": "134", "link": "on"})
+    assert form.is_valid(), form.errors
+    assert form.cleaned_data["upstream_id"] == 134
+    assert form.cleaned_data["source"] == DEFAULT_SOURCE
+
+
+def test_import_form_takes_the_source_from_a_url():
+    from scripts.forms import ScriptImportForm
+
+    form = ScriptImportForm(data={"reference": "http://botc-scripts:8000/script/7"})
+    assert form.is_valid(), form.errors
+    assert form.cleaned_data["source"] == "http://botc-scripts:8000"
+
+
+def test_import_form_reports_an_unusable_reference_against_that_field():
+    from scripts.forms import ScriptImportForm
+
+    form = ScriptImportForm(data={"reference": "nonsense"})
+    assert not form.is_valid()
+    assert "reference" in form.errors
+
+
+def test_import_is_a_reserved_slug():
+    # /script/import would otherwise be shadowed by a script slugged "import".
+    from django.core.exceptions import ValidationError
+
+    from scripts.slugs import validate_script_slug
+
+    with pytest.raises(ValidationError):
+        validate_script_slug("import")

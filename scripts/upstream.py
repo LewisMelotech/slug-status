@@ -16,11 +16,6 @@ from django.utils import timezone
 from versionfield import Version
 
 from scripts import models, script_json
-from scripts.views import (
-    calculate_edition,
-    count_character,
-    create_characters_and_determine_homebrew_status,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +112,23 @@ def url_of(response):
     return response.url
 
 
+def _view_helpers():
+    """Import the shared counting helpers lazily.
+
+    They live in scripts.views, which imports scripts.forms, which imports this
+    module for the import form — so importing them at module level would be a cycle.
+    """
+    from scripts.views import (
+        calculate_edition,
+        count_character,
+        create_characters_and_determine_homebrew_status,
+    )
+
+    return calculate_edition, count_character, create_characters_and_determine_homebrew_status
+
+
 def _counts(content):
+    _, count_character, _ = _view_helpers()
     return {
         "num_townsfolk": count_character(content, models.CharacterType.TOWNSFOLK),
         "num_outsiders": count_character(content, models.CharacterType.OUTSIDER),
@@ -177,8 +188,9 @@ def import_version(source, row, pdf=None, link=True):
         else:
             is_latest = False
 
+    calculate_edition, _, determine_homebrewiness = _view_helpers()
     content = script_json.get_json_content({"content": row.get("content")})
-    homebrewiness = create_characters_and_determine_homebrew_status(content, script)
+    homebrewiness = determine_homebrewiness(content, script)
 
     script_version = models.ScriptVersion.objects.create(
         script=script,

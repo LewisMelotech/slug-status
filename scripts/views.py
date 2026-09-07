@@ -9,7 +9,7 @@ import requests
 from django.contrib import messages
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import permission_required
-from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
 from django.contrib.auth.models import User
 from django.contrib.postgres.search import TrigramSimilarity
 from django.db.models import Case, Count, F, Prefetch, When
@@ -22,6 +22,7 @@ from django.http import (
     JsonResponse,
 )
 from django.shortcuts import redirect
+from django.urls import reverse
 from django.utils.text import get_valid_filename
 from django.views import generic
 from django_filters.views import FilterView
@@ -37,6 +38,7 @@ from scripts import (
     script_json,
     slugs,
     tables,
+    upstream,
 )
 
 
@@ -1434,3 +1436,47 @@ def create_characters_and_determine_homebrew_status(script_content: dict, script
         homebrewiness = models.Homebrewiness.HYBRID
 
     return homebrewiness
+
+
+class ScriptImportView(LoginRequiredMixin, PermissionRequiredMixin, generic.FormView):
+    """
+    Import a script from another instance through the site.
+
+    Gated on the same permission as the import API rather than left open like the
+    upload page: this makes the server fetch a URL the visitor supplies, so an
+    anonymous form here would be a way to aim it at anything the server can reach.
+    """
+
+    template_name = "import.html"
+    form_class = forms.ScriptImportForm
+    permission_required = "scripts.api_write_permission"
+
+    def form_valid(self, form):
+        try:
+            script, imported, skipped = upstream.import_script(
+                form.cleaned_data["upstream_id"],
+                source=form.cleaned_data["source"],
+                link=form.cleaned_data.get("link", False),
+                all_versions=form.cleaned_data.get("all_versions", False),
+            )
+        except upstream.UpstreamError as exc:
+            form.add_error("reference", str(exc))
+            return self.form_invalid(form)
+
+        if imported:
+            versions = ", ".join(str(version.version) for version in imported)
+            with_pdf = sum(1 for version in imported if version.pdf)
+            messages.success(
+                self.request,
+                f"Imported {script.name} {versions} ({with_pdf} of {len(imported)} with a PDF).",
+            )
+        if skipped:
+            messages.info(self.request, f"{skipped} version(s) were already here and were left alone.")
+        if script and script.sync_enabled:
+            messages.info(self.request, f"Linked to {script.upstream_url}; sync_upstream will follow it.")
+
+        self.script = script
+        return super().form_valid(form)
+
+    def get_success_url(self):
+        return reverse("script", kwargs={"pk": self.script.pk})
