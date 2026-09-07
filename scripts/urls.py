@@ -2,6 +2,7 @@ from importlib import import_module
 
 from allauth.account.views import login, logout, password_change, signup
 from allauth.socialaccount import providers
+from django.contrib.auth import views as auth_views
 from django.urls import include, path, re_path
 from django.views.generic.base import TemplateView
 from rest_framework import routers
@@ -162,6 +163,22 @@ urlpatterns = [
     re_path(r"^logout/$", logout, name="account_logout"),
     re_path(r"^signup/$", signup, name="account_signup"),
     re_path(r"^password/change/$", password_change, name="account_change_password"),
+    # Consumes the one-time links an admin generates. There is deliberately no
+    # "forgot password" form: this instance sends no email, so a link nobody can
+    # receive would be a dead end.
+    path(
+        "password/reset/<uidb64>/<token>/",
+        auth_views.PasswordResetConfirmView.as_view(
+            template_name="password_reset_confirm.html",
+            success_url="/password/reset/done/",
+        ),
+        name="password_reset_confirm",
+    ),
+    path(
+        "password/reset/done/",
+        auth_views.PasswordResetCompleteView.as_view(template_name="password_reset_complete.html"),
+        name="password_reset_complete",
+    ),
 ]
 
 provider_urlpatterns = []

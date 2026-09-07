@@ -184,8 +184,13 @@ MARKDOWNIFY = {
 }
 
 # django-allauth configuration
-ACCOUNT_LOGIN_METHODS = {"username", "email"}
-ACCOUNT_SIGNUP_FIELDS = ["username*", "email*", "password1*", "password2*"]
+# No email is collected: nothing here sends mail, there is no password reset flow, and
+# a self-hosted instance rarely has SMTP, so requiring an address only invites made-up
+# ones. Login is therefore by username; allauth rejects email as a login method when
+# email is not a signup field. Social accounts still carry whatever their provider
+# supplies.
+ACCOUNT_LOGIN_METHODS = {"username"}
+ACCOUNT_SIGNUP_FIELDS = ["username*", "password1*", "password2*"]
 SOCIALACCOUNT_AUTO_SIGNUP = True
 SOCIALACCOUNT_LOGIN_ON_GET = True
 
