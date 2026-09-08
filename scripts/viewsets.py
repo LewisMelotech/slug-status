@@ -166,6 +166,16 @@ class VersionViewSet(viewsets.ModelViewSet):
         latest = self.request.query_params.get("latest")
         if latest:
             queryset = queryset.filter(latest=True)
+        # The filterset excludes hybrid and homebrew scripts unless the box is ticked,
+        # which for an API means "unless the caller knows to ask". Default them on here
+        # so the Discord bot sees the same catalogue the website does; an explicit
+        # include_hybrid=false still turns them off.
+        params = self.request.query_params
+        if "include_hybrid" not in params or "include_homebrew" not in params:
+            params = params.copy()
+            params.setdefault("include_hybrid", "true")
+            params.setdefault("include_homebrew", "true")
+            self.request._request.GET = params
         return super().filter_queryset(queryset)
 
     @action(methods=["get"], detail=True)

@@ -72,7 +72,10 @@ class ScriptsListView(SingleTableMixin, FilterView):
     def get_filterset_kwargs(self, filterset_class):
         kwargs = super().get_filterset_kwargs(filterset_class)
         if kwargs["data"] is None:
-            kwargs["data"] = {"latest": True}
+            # Only for the unsubmitted first load. Once the filter form is submitted the
+            # data is the query string, where an unticked box is simply absent — which is
+            # what lets these two be turned back off.
+            kwargs["data"] = {"latest": True, "include_hybrid": True, "include_homebrew": True}
         return kwargs
 
     def get_table_class(self):
@@ -104,7 +107,10 @@ class UserScriptsListView(LoginRequiredMixin, SingleTableMixin, FilterView):
     def get_filterset_kwargs(self, filterset_class):
         kwargs = super().get_filterset_kwargs(filterset_class)
         if kwargs["data"] is None:
-            kwargs["data"] = {"latest": True}
+            # Only for the unsubmitted first load. Once the filter form is submitted the
+            # data is the query string, where an unticked box is simply absent — which is
+            # what lets these two be turned back off.
+            kwargs["data"] = {"latest": True, "include_hybrid": True, "include_homebrew": True}
         return kwargs
 
 

@@ -143,8 +143,8 @@ class AdvancedSearchForm(forms.Form):
     minimum_number_of_favourites = forms.IntegerField(required=False)
     minimum_number_of_comments = forms.IntegerField(required=False)
     all_scripts = forms.BooleanField(initial=False, label="Include all Script Versions", required=False)
-    include_hybrid = forms.BooleanField(initial=False, label="Include Hybrid", required=False)
-    include_homebrew = forms.BooleanField(initial=False, label="Include Homebrew", required=False)
+    include_hybrid = forms.BooleanField(initial=True, label="Include Hybrid", required=False)
+    include_homebrew = forms.BooleanField(initial=True, label="Include Homebrew", required=False)
     tag_combinations = forms.ChoiceField(
         choices=[("AND", "AND"), ("OR", "OR")], initial="AND", widget=forms.RadioSelect
     )
