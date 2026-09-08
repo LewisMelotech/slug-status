@@ -3,6 +3,7 @@ import re
 import django_filters
 from django import forms
 from django.contrib.postgres.search import TrigramSimilarity
+from django.db.models import Q
 from django_filters import rest_framework as filters
 
 from scripts import models, script_json, slugs, widgets
@@ -104,13 +105,18 @@ class BaseScriptVersionFilter(filters.FilterSet):
 
     def search_scripts(self, queryset, name, value):
         queryset = annotate_queryset(queryset, "script__name", value)
+        # A custom id is an exact handle, not a fuzzy one, so match it alongside the
+        # trigram search rather than relying on the name happening to be similar:
+        # searching "sects" should find the script slugged "sects" whatever it is called.
+        slug = slugs.normalise_slug(value)
+        by_slug = Q(script__slug=slug) if slug else Q(pk__in=[])
         try:
             if "ordering" in self.request.query_params:
-                return queryset.filter(similarity__gt=0.3)
+                return queryset.filter(Q(similarity__gt=0.3) | by_slug)
         except AttributeError:
             pass
 
-        return queryset.filter(similarity__gt=0).order_by("-similarity")
+        return queryset.filter(Q(similarity__gt=0) | by_slug).order_by("-similarity")
 
     def search_authors(self, queryset, name, value):
         queryset = annotate_queryset(queryset, "author", value)

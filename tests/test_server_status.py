@@ -54,3 +54,15 @@ def test_status_does_not_gate_anything():
 @pytest.mark.parametrize("value", ["offline", "online"])
 def test_status_values(value):
     assert value in models.ScriptStatus.values
+
+
+def test_status_labels_are_just_online_and_offline():
+    assert models.ScriptStatus.OFFLINE.label == "Offline"
+    assert models.ScriptStatus.ONLINE.label == "Online"
+
+
+def test_the_results_table_shows_the_custom_id():
+    from scripts.tables import ClocktowerTable
+
+    assert "slug" in ClocktowerTable.base_columns
+    assert ClocktowerTable.base_columns["slug"].verbose_name == "Custom id"

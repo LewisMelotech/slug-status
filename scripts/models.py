@@ -64,8 +64,8 @@ class ScriptStatus(models.TextChoices):
     scripts.set_server_status marks it ONLINE once it is actually on the server.
     """
 
-    OFFLINE = "offline", "Offline — not on the Minecraft server"
-    ONLINE = "online", "Online — live on the Minecraft server"
+    OFFLINE = "offline", "Offline"
+    ONLINE = "online", "Online"
 
 
 class ScriptTag(models.Model):
@@ -202,7 +202,7 @@ class ScriptVersion(models.Model):
         choices=ScriptStatus.choices,
         default=ScriptStatus.OFFLINE,
         db_index=True,
-        help_text="Whether this version is live on the Minecraft server. Does not affect visibility here.",
+        help_text="Whether this version is on the Minecraft server. Does not affect visibility here.",
     )
 
     objects = ScriptViewManager()

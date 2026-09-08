@@ -116,19 +116,19 @@
     {% endif %}
     <div class="col-auto align-self-end pb-2">
         {% if script_version.status == 'online' %}
-        <span class="badge badge-pill badge-success" title="This version is live on the Minecraft server">On the server</span>
+        <span class="badge badge-pill badge-success" title="This version is on the Minecraft server">Online</span>
         {% else %}
-        <span class="badge badge-pill badge-secondary" title="This version is not on the Minecraft server yet">Not on the server</span>
+        <span class="badge badge-pill badge-secondary" title="This version is not on the Minecraft server yet">Offline</span>
         {% endif %}
         {% if perms.scripts.set_server_status %}
         <form method="post" action="{% url 'set_script_status' pk=script_version.pk %}" class="d-inline m-0 ml-1">
             {% csrf_token %}
             {% if script_version.status == 'online' %}
             <input type="hidden" name="status" value="offline">
-            <button type="submit" class="btn btn-sm btn-outline-secondary py-0">Mark off server</button>
+            <button type="submit" class="btn btn-sm btn-outline-secondary py-0">Mark offline</button>
             {% else %}
             <input type="hidden" name="status" value="online">
-            <button type="submit" class="btn btn-sm btn-success py-0">Mark on server</button>
+            <button type="submit" class="btn btn-sm btn-success py-0">Mark online</button>
             {% endif %}
             <input type="hidden" name="next" value="{{ request.get_full_path }}">
         </form>

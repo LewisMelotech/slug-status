@@ -50,6 +50,20 @@ class ScriptTable(tables.Table):
         attrs={"td": {"class": "pl-2 pr-2 p-0 align-middle"}},
     )
 
+    # The slug belongs to the Script, not this version, so it needs an explicit
+    # template: a plain accessor column would render the value without the short link
+    # that makes it useful.
+    slug = tables.TemplateColumn(
+        template_code=(
+            "{% if record.script.slug %}"
+            '<a href="/script/{{ record.script.slug }}" title="Short link">{{ record.script.slug }}</a>'
+            "{% endif %}"
+        ),
+        verbose_name="Custom id",
+        order_by=("script.slug",),
+        attrs=table_class,
+    )
+
     author = tables.Column(attrs=table_class)
 
     script_type = tables.Column(attrs=table_class, verbose_name="Type")
@@ -100,6 +114,7 @@ class ClocktowerTable(ScriptTable):
         exclude = excluded_clocktower_version_fields
         sequence = (
             "name",
+            "slug",
             "author",
             "script_type",
             "score",
@@ -123,6 +138,7 @@ class UserClocktowerTable(ClocktowerTable):
         exclude = excluded_clocktower_version_fields
         sequence = (
             "name",
+            "slug",
             "author",
             "script_type",
             "score",
@@ -146,6 +162,7 @@ class CollectionClocktowerTable(UserClocktowerTable):
         exclude = excluded_clocktower_version_fields
         sequence = (
             "name",
+            "slug",
             "author",
             "script_type",
             "score",

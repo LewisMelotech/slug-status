@@ -30,8 +30,8 @@ Grant it in the Django admin → Users → the user → Permissions →
 - **The Server page**, at `/server`, linked from the nav for those who hold the
   permission. Lists everything not yet on the server, oldest first, with JSON and PDF
   links so you can grab the files you are about to deploy, and one button per row.
-- **The script's own page**, where a badge shows "On the server" or "Not on the server",
-  with a button to flip it for those who may.
+- **The script's own page**, where a badge shows Online or Offline, with a button to flip
+  it for those who may.
 - **The Django admin**, which has a status column, a status filter, inline editing and
   bulk mark-on / mark-off actions for doing a batch at once.
 

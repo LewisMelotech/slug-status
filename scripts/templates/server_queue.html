@@ -4,13 +4,12 @@
 
 {% block content %}
 
-<h4>{% trans 'Not yet on the Minecraft server' %}</h4>
+<h4>{% trans 'Offline scripts' %}</h4>
 
 <p class="text-muted">
-  Everything uploaded here starts offline and is marked online once it has actually been
-  put on the Minecraft server. This is a record of what has been deployed — every script
-  stays visible and downloadable either way. {{ online_count }} version{{ online_count|pluralize }}
-  {{ online_count|pluralize:"is,are" }} currently marked online.
+  Everything uploaded starts offline and is marked online once it is on the Minecraft
+  server. Every script stays visible and downloadable either way.
+  {{ online_count }} online.
 </p>
 
 {% if versions %}
@@ -24,7 +23,7 @@
         <th>Added by</th>
         <th>Added</th>
         <th>Files</th>
-        <th class="text-right">Server</th>
+        <th class="text-right">Status</th>
       </tr>
     </thead>
     <tbody>
@@ -70,7 +69,7 @@
 {% endif %}
 
 {% else %}
-<p>Nothing waiting — every version here is marked as live on the server.</p>
+<p>Nothing waiting — everything here is online.</p>
 {% endif %}
 
 {% endblock %}
