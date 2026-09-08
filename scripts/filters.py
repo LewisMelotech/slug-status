@@ -143,6 +143,14 @@ class ScriptVersionFilter(BaseScriptVersionFilter):
     def filter_edition(self, queryset, _, value):
         return queryset.filter(edition__lte=value)
 
+    # Exposed so a caller can ask for only what is on the Minecraft server, e.g.
+    # /api/scripts/?status=online. Unset means both, which keeps the website and every
+    # existing client seeing the whole catalogue.
+    status = django_filters.filters.ChoiceFilter(
+        choices=models.ScriptStatus.choices,
+        label="Server status",
+    )
+
     class Meta:
         model = models.ScriptVersion
         fields = [
@@ -157,6 +165,7 @@ class ScriptVersionFilter(BaseScriptVersionFilter):
             "all_scripts",
             "include_hybrid",
             "include_homebrew",
+            "status",
         ]
 
 
