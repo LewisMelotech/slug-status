@@ -15,7 +15,7 @@ A slug is stored lowercase, and mixed-case input is folded rather than rejected.
 | Rule | Why |
 | --- | --- |
 | Lowercase ASCII letters and digits, single internal hyphens: `^[a-z0-9]+(?:-[a-z0-9]+)*$` | URL-safe, and exactly one spelling per slug |
-| 2 to 50 characters | `Script.slug` is a `SlugField(max_length=50)` |
+| 1 to 50 characters | `Script.slug` is a `SlugField(max_length=50)` |
 | **Must not parse as an integer** (`13108`, `007`, `-12`, `1_0`, `+9` are all refused) | A slug shares its URL position with the numeric script id, and clients route on "is this all digits?". An integer-looking slug would silently resolve to a different script |
 | Must not be a reserved path segment (`search`, `upload`, `api`, `admin`, `all-roles`, …) | `/script/<slug>` would shadow an existing route. The full set is `scripts.slugs.RESERVED_SLUGS` |
 | Unique, case-insensitively | `sects` and `SECTS` are the same slug |

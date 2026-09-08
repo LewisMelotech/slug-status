@@ -28,6 +28,7 @@ def test_normalise_slug(value, expected):
         "tb2",
         "SECTS",
         "  Sects  ",
+        "a",
         "a" * 50,
     ],
 )
@@ -61,7 +62,6 @@ def test_valid_slugs_are_accepted(value):
         ("café", "invalid"),
         ("sects/violets", "invalid"),
         # Length.
-        ("a", "too_short"),
         ("a" * 51, "too_long"),
         ("", "blank"),
         ("   ", "blank"),
