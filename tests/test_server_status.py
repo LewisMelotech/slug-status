@@ -66,3 +66,34 @@ def test_the_results_table_shows_the_custom_id():
 
     assert "slug" in ClocktowerTable.base_columns
     assert ClocktowerTable.base_columns["slug"].verbose_name == "Custom id"
+
+
+def test_sorting_and_paging_keep_the_default_filters():
+    """Regression: a sort link is not a filter submission.
+
+    An unticked checkbox is absent from the query string, so absence must mean off —
+    but sorting and pagination also produce query strings, and treating those as an
+    empty form dropped hybrid and homebrew scripts on every sort.
+    """
+    from django.http import QueryDict
+
+    from scripts.views import _filter_defaults
+
+    for query in ("", "sort=name", "page=2", "sort=-score"):
+        data = _filter_defaults(QueryDict(query))
+        assert data["include_hybrid"] == "True", query
+        assert data["include_homebrew"] == "True", query
+        assert data["latest"] == "True", query
+
+
+def test_a_submitted_form_is_taken_literally():
+    from django.http import QueryDict
+
+    from scripts.views import _filter_defaults
+
+    # filtered=1 marks a real submission, so the missing boxes mean the user turned
+    # them off — including once a sort is added on top.
+    for query in ("filtered=1&latest=True", "filtered=1&latest=True&sort=name"):
+        data = _filter_defaults(QueryDict(query))
+        assert "include_hybrid" not in data, query
+        assert "include_homebrew" not in data, query

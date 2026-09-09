@@ -21,6 +21,7 @@ from django.http import (
     HttpResponseNotAllowed,
     HttpResponseRedirect,
     JsonResponse,
+    QueryDict,
 )
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
@@ -43,6 +44,28 @@ from scripts import (
     tables,
     upstream,
 )
+
+
+def _filter_defaults(data):
+    """Apply the default filters unless the filter form was actually submitted.
+
+    An unticked checkbox is simply absent from the query string, so absence has to mean
+    "off" — but sorting and pagination links carry query params without going through
+    the form, and treating those as an empty form silently dropped hybrid and homebrew
+    scripts on every sort or page change. The form posts filtered=1; without it, the
+    defaults apply whatever else is in the URL.
+    """
+    submitted = data is not None and "filtered" in data
+    merged = QueryDict(mutable=True)
+    if data:
+        for key in data:
+            values = data.getlist(key) if hasattr(data, "getlist") else [data[key]]
+            merged.setlist(key, values)
+    if not submitted:
+        merged.setdefault("latest", "True")
+        merged.setdefault("include_hybrid", "True")
+        merged.setdefault("include_homebrew", "True")
+    return merged
 
 
 class ScriptsListView(SingleTableMixin, FilterView):
@@ -71,11 +94,7 @@ class ScriptsListView(SingleTableMixin, FilterView):
 
     def get_filterset_kwargs(self, filterset_class):
         kwargs = super().get_filterset_kwargs(filterset_class)
-        if kwargs["data"] is None:
-            # Only for the unsubmitted first load. Once the filter form is submitted the
-            # data is the query string, where an unticked box is simply absent — which is
-            # what lets these two be turned back off.
-            kwargs["data"] = {"latest": True, "include_hybrid": True, "include_homebrew": True}
+        kwargs["data"] = _filter_defaults(kwargs["data"])
         return kwargs
 
     def get_table_class(self):
@@ -106,11 +125,7 @@ class UserScriptsListView(LoginRequiredMixin, SingleTableMixin, FilterView):
 
     def get_filterset_kwargs(self, filterset_class):
         kwargs = super().get_filterset_kwargs(filterset_class)
-        if kwargs["data"] is None:
-            # Only for the unsubmitted first load. Once the filter form is submitted the
-            # data is the query string, where an unticked box is simply absent — which is
-            # what lets these two be turned back off.
-            kwargs["data"] = {"latest": True, "include_hybrid": True, "include_homebrew": True}
+        kwargs["data"] = _filter_defaults(kwargs["data"])
         return kwargs
 
 
