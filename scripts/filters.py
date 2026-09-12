@@ -166,6 +166,7 @@ class ScriptVersionFilter(BaseScriptVersionFilter):
             "include_hybrid",
             "include_homebrew",
             "status",
+            "script",
         ]
 
 
