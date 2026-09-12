@@ -211,6 +211,19 @@ class ScriptVersion(models.Model):
     def __str__(self):
         return f"{self.pk}. {self.script.name} - v{self.version}"
 
+    def save(self, *args, **kwargs):
+        # At most one version of a script is on the Minecraft server at a time: putting
+        # one online takes whichever was there off. Enforced here rather than in the
+        # view so the admin, the shell and anything written later cannot end up with two
+        # versions both claiming to be deployed. None online is still fine.
+        super().save(*args, **kwargs)
+        if self.status == ScriptStatus.ONLINE:
+            # plain_objects, not objects: the default manager annotates, and an annotated
+            # queryset cannot be used for update().
+            ScriptVersion.plain_objects.filter(
+                script_id=self.script_id, status=ScriptStatus.ONLINE
+            ).exclude(pk=self.pk).update(status=ScriptStatus.OFFLINE)
+
     class Meta:
         permissions = [
             (

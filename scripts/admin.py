@@ -66,7 +66,13 @@ class ScriptAdmin(admin.ModelAdmin):
 
 @admin.action(description="Mark selected versions as live on the Minecraft server")
 def mark_on_server(modeladmin, request, queryset):
-    updated = queryset.update(status=models.ScriptStatus.ONLINE)
+    # One at a time through save(), not queryset.update(), which bypasses it — save() is
+    # what takes the script's previously online version off the server.
+    updated = 0
+    for version in queryset:
+        version.status = models.ScriptStatus.ONLINE
+        version.save(update_fields=["status"])
+        updated += 1
     modeladmin.message_user(request, f"{updated} version(s) marked online.", level=messages.SUCCESS)
 
 

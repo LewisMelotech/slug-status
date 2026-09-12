@@ -11,6 +11,11 @@ Everything uploaded or imported starts `offline`, because nothing has been deplo
 moment it arrives. Someone holding `scripts.set_server_status` marks it `online` once it is
 actually on the server.
 
+**At most one version of a script is online at a time.** Marking a version online takes
+whichever version was there off, since only one can actually be on the server. None online
+is perfectly fine — that is the normal state for a script you have not deployed. This is
+enforced in the model, so the website, the admin and the shell all behave the same way.
+
 ## Who can change it
 
 | | Sees the status | Changes it |

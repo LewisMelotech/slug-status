@@ -1,3 +1,5 @@
+import inspect
+
 import pytest
 
 from scripts import models
@@ -97,3 +99,19 @@ def test_a_submitted_form_is_taken_literally():
         data = _filter_defaults(QueryDict(query))
         assert "include_hybrid" not in data, query
         assert "include_homebrew" not in data, query
+
+
+def test_only_one_version_of_a_script_can_be_online():
+    """The rule lives in ScriptVersion.save(), not in a view.
+
+    Only one version is ever actually on the Minecraft server, so putting one online
+    has to take the previous one off — whichever route did it.
+    """
+    from scripts.models import ScriptVersion
+
+    source = inspect.getsource(ScriptVersion.save)
+    assert "ScriptStatus.ONLINE" in source
+    assert "update(status=ScriptStatus.OFFLINE)" in source
+    # Scoped to the one script, and never demotes the version being saved.
+    assert "script_id=self.script_id" in source
+    assert "exclude(pk=self.pk)" in source
