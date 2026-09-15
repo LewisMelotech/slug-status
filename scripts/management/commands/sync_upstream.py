@@ -6,7 +6,7 @@ not, and a script whose upstream copy has not changed costs one request.
 
 from django.core.management.base import BaseCommand, CommandError
 
-from scripts import models, upstream
+from scripts import models, notifications, upstream
 
 
 class Command(BaseCommand):
@@ -36,24 +36,28 @@ class Command(BaseCommand):
             self.stdout.write("No linked scripts. Import one with --link first.")
             return
 
+        # One Discord announcement for the whole run, covering every script that gained a
+        # version. Hourly across a few dozen linked scripts, a message per script would be
+        # a burst of near-identical pings on the hour.
         added = failures = 0
-        for script in scripts:
-            if options["dry_run"]:
-                self.stdout.write(f"would sync: {script} <- {script.upstream_url}")
-                continue
-            try:
-                imported = upstream.sync_script(script)
-            except upstream.UpstreamError as exc:
-                failures += 1
-                self.stderr.write(self.style.ERROR(f"{script}: {exc}"))
-                continue
+        with notifications.batched():
+            for script in scripts:
+                if options["dry_run"]:
+                    self.stdout.write(f"would sync: {script} <- {script.upstream_url}")
+                    continue
+                try:
+                    imported = upstream.sync_script(script)
+                except upstream.UpstreamError as exc:
+                    failures += 1
+                    self.stderr.write(self.style.ERROR(f"{script}: {exc}"))
+                    continue
 
-            if imported:
-                added += len(imported)
-                for version in imported:
-                    self.stdout.write(self.style.SUCCESS(f"new version: {script.name} {version.version}"))
-            else:
-                self.stdout.write(f"up to date: {script.name}")
+                if imported:
+                    added += len(imported)
+                    for version in imported:
+                        self.stdout.write(self.style.SUCCESS(f"new version: {script.name} {version.version}"))
+                else:
+                    self.stdout.write(f"up to date: {script.name}")
 
         if not options["dry_run"]:
             self.stdout.write(f"done: {added} new version(s) across {len(scripts)} linked script(s)")

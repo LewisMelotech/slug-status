@@ -15,7 +15,7 @@ from django.db import transaction
 from django.utils import timezone
 from versionfield import Version
 
-from scripts import models, script_json
+from scripts import models, notifications, script_json
 
 logger = logging.getLogger(__name__)
 
@@ -253,17 +253,21 @@ def import_script(reference, source=DEFAULT_SOURCE, link=True, all_versions=Fals
 
     wanted = versions.items() if all_versions else [_latest_of(versions, detail)]
 
+    # One announcement for the import, not one per version: pulling a script's whole
+    # history writes a row per version, and that is still only one new script worth
+    # telling a channel about.
     imported, skipped = [], 0
-    for version_number, url in wanted:
-        row = client.version(url)
-        pdf = client.pdf(upstream_id, row.get("version") or version_number)
-        created = import_version(source, row, pdf=pdf, link=link)
-        if created is None:
-            skipped += 1
-            logger.info("Already held %s %s from %s", detail.get("name"), version_number, source)
-        else:
-            imported.append(created)
-            logger.info("Imported %s %s from %s", detail.get("name"), version_number, source)
+    with notifications.batched():
+        for version_number, url in wanted:
+            row = client.version(url)
+            pdf = client.pdf(upstream_id, row.get("version") or version_number)
+            created = import_version(source, row, pdf=pdf, link=link)
+            if created is None:
+                skipped += 1
+                logger.info("Already held %s %s from %s", detail.get("name"), version_number, source)
+            else:
+                imported.append(created)
+                logger.info("Imported %s %s from %s", detail.get("name"), version_number, source)
 
     script = models.Script.objects.filter(upstream_source=source, upstream_id=upstream_id).first()
     if script is None:

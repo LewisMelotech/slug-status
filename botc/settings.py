@@ -213,6 +213,23 @@ IMPORT_SOURCES = [
     if source.strip()
 ]
 
+# Announcing new script versions to a Discord channel, through an incoming webhook.
+# Blank switches the whole thing off, which is the default: an instance that has not been
+# given a webhook says nothing to anybody. Treat the URL as a secret — anyone holding it
+# can post to that channel.
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+
+# Prepended to each announcement so the right people see it, e.g. "<@&123456789012345678>"
+# for a role, or "@here". Only the id named here is ever allowed to ping; a mention that
+# happens to appear in a script's name is inert. See scripts/notifications.py.
+DISCORD_WEBHOOK_MENTION = os.getenv("DISCORD_WEBHOOK_MENTION", "").strip()
+
+# Absolute base for links in announcements. Nothing outside a request knows the site's own
+# address, and the sync container never has one, so it is configured rather than derived.
+# Left blank, the first CSRF trusted origin is used, which is the same public origin in
+# any deployment that has one.
+SITE_URL = os.getenv("SITE_URL", "").strip().rstrip("/")
+
 # Allow CORS access to the API for GETs only.
 CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS", False) == "True"
 CORS_URLS_REGEX = r"^.*/api/.*$"
