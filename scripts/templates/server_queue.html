@@ -4,13 +4,41 @@
 
 {% block content %}
 
-<h4>{% trans 'Offline scripts' %}</h4>
+<h4>{% trans 'Minecraft server' %}</h4>
 
 <p class="text-muted">
-  Everything uploaded starts offline and is marked online once it is on the Minecraft
-  server. Every script stays visible and downloadable either way.
-  {{ online_count }} online.
+  Every script stays visible and downloadable whatever its status. This only records what
+  has actually been put on the server. {{ online_count }} online.
 </p>
+
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item">
+    <a class="nav-link{% if not showing_superseded %} active{% endif %}" href="{% url 'server_queue' %}">
+      {% trans 'Needs deploying' %}
+      <span class="badge badge-pill {% if awaiting_count %}badge-warning{% else %}badge-light{% endif %}">{{ awaiting_count }}</span>
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link{% if showing_superseded %} active{% endif %}" href="{% url 'server_queue' %}?show=superseded">
+      {% trans 'Superseded' %}
+      <span class="badge badge-pill badge-light">{{ superseded_count }}</span>
+    </a>
+  </li>
+</ul>
+
+{% if showing_superseded %}
+<p class="text-muted">
+  Older versions of scripts that already have a newer one on the server. Deploying an
+  update takes the previous version off, so these collect here and nothing needs doing
+  about them. Marking one online puts it back and takes the current one off, which is how
+  you roll a script back.
+</p>
+{% else %}
+<p class="text-muted">
+  The newest version of each of these is not the one on the server — either nothing of it
+  has been deployed yet, or the server is running something older. Newest first.
+</p>
+{% endif %}
 
 {% if versions %}
 <div class="table-responsive">
@@ -19,6 +47,7 @@
       <tr>
         <th>Script</th>
         <th>Version</th>
+        <th>On the server</th>
         <th>Author</th>
         <th>Added by</th>
         <th>Added</th>
@@ -31,6 +60,13 @@
       <tr>
         <td><a href="{% url 'script' pk=version.script.pk %}">{{ version.script.name }}</a></td>
         <td>{{ version.version }}</td>
+        <td>
+          {% if version.currently_online %}
+            {{ version.currently_online.version }}
+          {% else %}
+            <span class="text-muted">{% trans 'nothing yet' %}</span>
+          {% endif %}
+        </td>
         <td>{{ version.author|default:"—" }}</td>
         <td>{{ version.script.owner|default:"anonymous" }}</td>
         <td>{{ version.created|date:"j M Y, H:i" }}</td>
@@ -58,18 +94,22 @@
 <nav>
   <ul class="pagination">
     {% if page_obj.has_previous %}
-    <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}">Previous</a></li>
+    <li class="page-item"><a class="page-link" href="?{% if showing_superseded %}show=superseded&amp;{% endif %}page={{ page_obj.previous_page_number }}">Previous</a></li>
     {% endif %}
     <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
     {% if page_obj.has_next %}
-    <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a></li>
+    <li class="page-item"><a class="page-link" href="?{% if showing_superseded %}show=superseded&amp;{% endif %}page={{ page_obj.next_page_number }}">Next</a></li>
     {% endif %}
   </ul>
 </nav>
 {% endif %}
 
 {% else %}
-<p>Nothing waiting — everything here is online.</p>
+  {% if showing_superseded %}
+  <p>Nothing here — no script has had a version replaced on the server yet.</p>
+  {% else %}
+  <p>Nothing waiting — the newest version of every script is the one on the server.</p>
+  {% endif %}
 {% endif %}
 
 {% endblock %}

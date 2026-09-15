@@ -1518,24 +1518,63 @@ class ScriptImportView(generic.FormView):
         return reverse("script", kwargs={"pk": self.script.pk})
 
 
+def _attach_online_version(versions):
+    """Note which version of each script is actually on the server, for comparison.
+
+    One query for the page rather than one per row, and an attribute rather than a
+    Subquery annotation because version is a VersionField: a subquery returns the packed
+    integer it is stored as, where the attribute renders as 1.0.4.
+    """
+    script_ids = {version.script_id for version in versions}
+    if not script_ids:
+        return
+    online = {
+        version.script_id: version
+        for version in models.ScriptVersion.plain_objects.filter(
+            script_id__in=script_ids, status=models.ScriptStatus.ONLINE
+        )
+    }
+    for version in versions:
+        version.currently_online = online.get(version.script_id)
+
+
 class ServerQueueView(LoginRequiredMixin, PermissionRequiredMixin, generic.ListView):
-    """Scripts not yet marked as live on the Minecraft server."""
+    """What still needs putting on the Minecraft server, and what has been left behind.
+
+    Two tabs over the same pile rather than one list, because superseded versions
+    outnumber outstanding ones several times over and never stop accumulating — see
+    server_status.SUPERSEDED for why. Shown together they bury the handful of rows
+    actually worth acting on.
+    """
 
     template_name = "server_queue.html"
     context_object_name = "versions"
     permission_required = server_status.SET_STATUS
     paginate_by = 25
 
+    @property
+    def showing_superseded(self):
+        return self.request.GET.get("show") == "superseded"
+
     def get_queryset(self):
+        criteria = server_status.SUPERSEDED if self.showing_superseded else server_status.AWAITING_DEPLOYMENT
+        # Newest first, where this page used to be oldest first. What just arrived is
+        # what needs doing, and a Discord announcement links straight here — landing on
+        # the oldest 25 rows put it on the last page.
         return (
-            models.ScriptVersion.objects.filter(status=models.ScriptStatus.OFFLINE)
+            models.ScriptVersion.objects.filter(**criteria)
             .select_related("script", "script__owner")
-            .order_by("created")
+            .order_by("-created")
         )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["online_count"] = models.ScriptVersion.objects.filter(status=models.ScriptStatus.ONLINE).count()
+        offline = models.ScriptVersion.plain_objects.filter(status=models.ScriptStatus.OFFLINE)
+        context["awaiting_count"] = offline.filter(latest=True).count()
+        context["superseded_count"] = offline.filter(latest=False).count()
+        context["online_count"] = models.ScriptVersion.plain_objects.filter(status=models.ScriptStatus.ONLINE).count()
+        context["showing_superseded"] = self.showing_superseded
+        _attach_online_version(context["versions"])
         return context
 
 

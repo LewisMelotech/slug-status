@@ -21,7 +21,7 @@
             </li>
             {% if perms.scripts.set_server_status %}
             <li class="nav-item">
-                <a class="nav-link" href="{% url 'server_queue' %}">Server</a>
+                <a class="nav-link" href="{% url 'server_queue' %}">Server{% if awaiting_deployment %} <span class="badge badge-pill badge-warning">{{ awaiting_deployment }}</span>{% endif %}</a>
             </li>
             {% endif %}
             <li class="nav-item dropdown">

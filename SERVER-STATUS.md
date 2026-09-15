@@ -33,14 +33,38 @@ Grant it in the Django admin → Users → the user → Permissions →
 ## Where to change it
 
 - **The Server page**, at `/server`, linked from the nav for those who hold the
-  permission. Lists everything not yet on the server, oldest first, with JSON and PDF
-  links so you can grab the files you are about to deploy, and one button per row.
+  permission, with a badge showing how many scripts are waiting. JSON and PDF links on
+  every row so you can grab the files you are about to deploy, and one button per row.
+  See below for its two tabs.
 - **The script's own page**, where a badge shows Online or Offline, with a button to flip
   it for those who may.
 - **The Django admin**, which has a status column, a status filter, inline editing and
   bulk mark-on / mark-off actions for doing a batch at once.
 
 Changing a status is POST-only, so it cannot happen by following or prefetching a link.
+
+### The two tabs on the Server page
+
+Every version that is not online is "offline", but that covers two unrelated things, so
+the page separates them.
+
+**Needs deploying** is the queue: the newest version of a script, not on the server.
+Either nothing of that script has been deployed, or the server is running an older one.
+Each row shows what is currently online beside it, so an update reads as "1.0.5, replacing
+1.0.4" and a first deployment reads as "nothing yet". Newest first, because what just
+arrived is usually what needs doing — and a Discord announcement links straight here.
+
+**Superseded** is everything else: older versions of scripts that already have a newer one
+online. Deploying an update takes the previous version off the server, so this tab gains a
+row every time the feature is used correctly, and never shrinks. Nothing here needs doing.
+
+They are separate because the second grows without limit and the first does not. On a
+41-script instance the split was 8 outstanding against 25 superseded, and a single list
+ordered oldest-first put every one of the 8 on the last page.
+
+Superseded versions are kept one click away rather than hidden, because marking one online
+is how you **roll a script back** — it goes on the server and the current one comes off.
+
 
 ## From the API
 
