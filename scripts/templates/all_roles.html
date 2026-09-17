@@ -35,17 +35,7 @@
     <div class="col-md-auto pl-1 p-0">
         <form class="form-inline mb-0" method="get" action="{% url 'download_all_roles_json' %}">
             <div class="col-md-auto p-1 pt-0">
-                <div class="btn-group">
-                    <button type="submit" class="btn btn-primary">Download JSON</button>
-                    <button type="submit" class="btn btn-primary dropdown-toggle dropdown-toggle-split" id="downloadJsonButton" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                        <span class="sr-only">Toggle Dropdown</span>
-                    </button>
-                    <div class="dropdown-menu" aria-labelledby="downloadJsonButton">
-                        {% for language in languages %}
-                            <button type="submit" class="dropdown-item" name="language_select" value={{ language }}>{% get_language_name language %}</a>
-                        {% endfor %}
-                    </div>
-                </div>
+                <button type="submit" class="btn btn-primary">Download JSON</button>
             </div>
         </form>
     </div>  

@@ -272,7 +272,7 @@ def test_the_badge_is_counted_for_someone_who_can(rendering, monkeypatch):
     assert context_processors.custom_configuration(request)["awaiting_deployment"] == 8
 
 
-@pytest.mark.parametrize("template", ["server_queue.html", "navbar.html"])
+@pytest.mark.parametrize("template", ["server_queue.html", "navbar.html", "script.html", "all_roles.html"])
 def test_the_templates_compile(template):
     """A broken tag in a template is a 500 on a live page, not a failing import."""
     from django.template.loader import get_template
@@ -369,3 +369,19 @@ def test_on_the_deploying_tab_both_versions_in_a_row_are_links(rendering):
     html = _render_queue([_queue_row(7, "Assigned Mutant at Birth", "1.0.6", online="1.0.4")])
     assert '<a href="/script/7/1.0.6">1.0.6</a>' in html
     assert '<a href="/script/7/1.0.4">1.0.4</a>' in html
+
+
+@pytest.mark.parametrize("template", ["script.html", "all_roles.html"])
+def test_json_downloads_offer_no_language_choice(template):
+    """This instance keeps no translations, so the language menu only offered dead ends.
+
+    Guards against a merge from upstream, which still has the menu, quietly bringing it
+    back. The views still build the language list, but it is a lazy queryset that nothing
+    evaluates any more, so it costs no query.
+    """
+    from django.template.loader import get_template
+
+    source = get_template(template).template.source
+    assert "language_select" not in source
+    assert "dropdown-toggle-split" not in source
+    assert "Download JSON" in source

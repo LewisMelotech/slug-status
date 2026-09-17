@@ -181,17 +181,7 @@
     </div>
     <div class="col-md-auto pl-1 p-0">
         <div class="col-md-auto p-1 pt-0">
-            <div class="btn-group">
-                <a class="btn btn-primary" href="{% url 'download_json' script.pk script_version.version %}">Download JSON</a>
-                <button type="button" class="btn btn-primary dropdown-toggle dropdown-toggle-split" id="downloadJsonButton" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                    <span class="sr-only">Toggle Dropdown</span>
-                </button>
-                <div class="dropdown-menu" aria-labelledby="downloadJsonButton">
-                    {% for language in languages %}
-                        <a class="dropdown-item" href="{% url 'download_json' script.pk script_version.version %}?language_select={{ language }}">{% get_language_name language %}</a>
-                    {% endfor %}
-                </div>
-            </div>
+            <a class="btn btn-primary" href="{% url 'download_json' script.pk script_version.version %}">Download JSON</a>
         </div>
     </div>  
     {% if script_version.pdf %}
