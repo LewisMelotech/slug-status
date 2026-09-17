@@ -213,16 +213,21 @@ IMPORT_SOURCES = [
     if source.strip()
 ]
 
-# Announcing new script versions to a Discord channel, through an incoming webhook.
-# Blank switches the whole thing off, which is the default: an instance that has not been
-# given a webhook says nothing to anybody. Treat the URL as a secret — anyone holding it
-# can post to that channel.
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+# Arrivals: announcing new scripts and new versions to a Discord channel, through an
+# incoming webhook. Blank switches arrivals off, which is the default. Treat the URL as a
+# secret — anyone holding it can post to that channel.
+DISCORD_ARRIVALS_WEBHOOK_URL = os.getenv("DISCORD_ARRIVALS_WEBHOOK_URL", "").strip()
 
 # Prepended to each announcement so the right people see it, e.g. "<@&123456789012345678>"
 # for a role, or "@here". Only the id named here is ever allowed to ping; a mention that
 # happens to appear in a script's name is inert. See scripts/notifications.py.
-DISCORD_WEBHOOK_MENTION = os.getenv("DISCORD_WEBHOOK_MENTION", "").strip()
+DISCORD_ARRIVALS_WEBHOOK_MENTION = os.getenv("DISCORD_ARRIVALS_WEBHOOK_MENTION", "").strip()
+
+# A second, separate webhook for when a version is marked as on the Minecraft server, so
+# deployments can go to a different channel from arrivals. Independent of the arrivals
+# webhook above: either, both or neither may be set. Same mention format.
+DISCORD_ONLINE_WEBHOOK_URL = os.getenv("DISCORD_ONLINE_WEBHOOK_URL", "").strip()
+DISCORD_ONLINE_WEBHOOK_MENTION = os.getenv("DISCORD_ONLINE_WEBHOOK_MENTION", "").strip()
 
 # Absolute base for links in announcements. Nothing outside a request knows the site's own
 # address, and the sync container never has one, so it is configured rather than derived.

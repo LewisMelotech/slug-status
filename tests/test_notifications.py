@@ -20,17 +20,29 @@ def make(name="Trouble Brewing", version="1.0.0", author="TPI", new_script=False
 
 @pytest.fixture
 def enabled(settings):
-    settings.DISCORD_WEBHOOK_URL = WEBHOOK
-    settings.DISCORD_WEBHOOK_MENTION = ""
+    settings.DISCORD_ARRIVALS_WEBHOOK_URL = WEBHOOK
+    settings.DISCORD_ARRIVALS_WEBHOOK_MENTION = ""
     settings.SITE_URL = "https://scripts.example.com"
     return settings
 
 
 @pytest.fixture
-def sent(monkeypatch):
+def deliveries():
+    """(webhook, payload) for everything sent, for tests that care where it went."""
+    return []
+
+
+@pytest.fixture
+def sent(monkeypatch, deliveries):
     """Capture payloads instead of posting them."""
     payloads = []
-    monkeypatch.setattr(notifications, "post", lambda payload: payloads.append(payload) or True)
+
+    def capture(payload, webhook):
+        payloads.append(payload)
+        deliveries.append((webhook, payload))
+        return True
+
+    monkeypatch.setattr(notifications, "post", capture)
     return payloads
 
 
@@ -44,7 +56,7 @@ def immediate_commit(monkeypatch):
 
 
 def test_no_webhook_means_no_announcement(settings, monkeypatch):
-    settings.DISCORD_WEBHOOK_URL = ""
+    settings.DISCORD_ARRIVALS_WEBHOOK_URL = ""
     called = []
     monkeypatch.setattr(notifications.requests, "post", lambda *a, **k: called.append(a))
     assert notifications.announce([make()]) is False
@@ -81,7 +93,7 @@ def test_site_url_may_be_unknown(settings):
 
 
 def test_an_announcement_without_a_site_url_still_sends(settings, sent):
-    settings.DISCORD_WEBHOOK_URL = WEBHOOK
+    settings.DISCORD_ARRIVALS_WEBHOOK_URL = WEBHOOK
     settings.SITE_URL = ""
     settings.CSRF_TRUSTED_ORIGINS = []
     assert notifications.announce([make()]) is True
@@ -116,7 +128,7 @@ def test_an_unknown_author_is_left_out(enabled, sent):
     assert "by" not in sent[0]["embeds"][0]["description"]
 
 
-def test_several_scripts_become_one_digest(enabled, sent):
+def test_several_scripts_become_one_batch(enabled, sent):
     notifications.announce([make(pk=1, name="One"), make(pk=2, name="Two", new_script=True)])
     assert len(sent) == 1
     embed = sent[0]["embeds"][0]
@@ -126,14 +138,14 @@ def test_several_scripts_become_one_digest(enabled, sent):
     assert "new version" in embed["description"]
 
 
-def test_a_long_digest_is_truncated(enabled, sent):
+def test_a_long_batch_is_truncated(enabled, sent):
     notifications.announce([make(pk=index, name=f"Script {index}") for index in range(notifications.MAX_LINES + 5)])
     description = sent[0]["embeds"][0]["description"]
     assert description.count("\n") == notifications.MAX_LINES
     assert "…and 5 more" in description
 
 
-def test_a_digest_of_the_longest_names_discord_would_still_accept(enabled, sent):
+def test_a_batch_of_the_longest_names_discord_would_still_accept(enabled, sent):
     """Names and authors are 100 characters each in the model, and escaping doubles them.
 
     Twenty such lines run past Discord's 4096-character description cap, and it rejects
@@ -149,7 +161,7 @@ def test_a_digest_of_the_longest_names_discord_would_still_accept(enabled, sent)
     assert "more" in embed["description"].rsplit("\n", 1)[-1]
 
 
-def test_a_digest_that_fits_is_not_truncated(enabled, sent):
+def test_a_batch_that_fits_is_not_truncated(enabled, sent):
     notifications.announce([make(pk=index, name=f"Script {index}") for index in range(3)])
     description = sent[0]["embeds"][0]["description"]
     assert "more" not in description
@@ -166,16 +178,16 @@ def test_a_script_named_everyone_cannot_ping_the_channel(enabled, sent):
 
 
 def test_the_configured_role_may_ping(settings, sent):
-    settings.DISCORD_WEBHOOK_URL = WEBHOOK
-    settings.DISCORD_WEBHOOK_MENTION = "<@&123456789012345678>"
+    settings.DISCORD_ARRIVALS_WEBHOOK_URL = WEBHOOK
+    settings.DISCORD_ARRIVALS_WEBHOOK_MENTION = "<@&123456789012345678>"
     notifications.announce([make(name="@everyone look at this")])
     assert sent[0]["content"] == "<@&123456789012345678>"
     assert sent[0]["allowed_mentions"] == {"parse": [], "roles": ["123456789012345678"]}
 
 
 def test_here_may_be_configured_deliberately(settings, sent):
-    settings.DISCORD_WEBHOOK_URL = WEBHOOK
-    settings.DISCORD_WEBHOOK_MENTION = "@here"
+    settings.DISCORD_ARRIVALS_WEBHOOK_URL = WEBHOOK
+    settings.DISCORD_ARRIVALS_WEBHOOK_MENTION = "@here"
     notifications.announce([make()])
     assert sent[0]["allowed_mentions"]["parse"] == ["everyone"]
 
@@ -216,7 +228,7 @@ def test_a_successful_post_reports_success(enabled, monkeypatch):
         text = ""
 
     monkeypatch.setattr(notifications.requests, "post", lambda *a, **k: Response())
-    assert notifications.post({"embeds": []}) is True
+    assert notifications.post({"embeds": []}, notifications.ARRIVALS) is True
 
 
 def test_an_unreachable_discord_is_swallowed(enabled, monkeypatch):
@@ -224,7 +236,7 @@ def test_an_unreachable_discord_is_swallowed(enabled, monkeypatch):
         raise requests.ConnectionError("no route to host")
 
     monkeypatch.setattr(notifications.requests, "post", refuse)
-    assert notifications.post({"embeds": []}) is False
+    assert notifications.post({"embeds": []}, notifications.ARRIVALS) is False
 
 
 def test_a_rejected_webhook_is_swallowed(enabled, monkeypatch):
@@ -233,7 +245,7 @@ def test_a_rejected_webhook_is_swallowed(enabled, monkeypatch):
         text = '{"message": "Unknown Webhook"}'
 
     monkeypatch.setattr(notifications.requests, "post", lambda *a, **k: Response())
-    assert notifications.post({"embeds": []}) is False
+    assert notifications.post({"embeds": []}, notifications.ARRIVALS) is False
 
 
 def test_announce_never_raises(enabled, monkeypatch):
@@ -300,7 +312,7 @@ def test_outside_a_batch_each_version_is_announced(enabled, sent, recording, imm
 
 
 def test_nothing_is_recorded_when_the_webhook_is_unset(settings, sent, recording):
-    settings.DISCORD_WEBHOOK_URL = ""
+    settings.DISCORD_ARRIVALS_WEBHOOK_URL = ""
     with notifications.batched():
         notifications.record(make())
     assert sent == []
@@ -395,3 +407,451 @@ class _CountingManager:
 
     def count(self):
         return self.held
+
+
+# --- Deployments: a second, separate webhook ----------------------------------------------
+
+ONLINE_WEBHOOK = "https://discord.com/api/webhooks/2/online"
+
+
+def deploy(name="Trouble Brewing", version="1.1.0", replacing="1.0.0", by="lewis", pk=1):
+    return notifications.Deployment(
+        script_pk=pk, name=name, version=version, path=f"/script/{pk}", replacing=replacing, by=by
+    )
+
+
+@pytest.fixture
+def both(settings):
+    settings.DISCORD_ARRIVALS_WEBHOOK_URL = WEBHOOK
+    settings.DISCORD_ARRIVALS_WEBHOOK_MENTION = ""
+    settings.DISCORD_ONLINE_WEBHOOK_URL = ONLINE_WEBHOOK
+    settings.DISCORD_ONLINE_WEBHOOK_MENTION = ""
+    settings.SITE_URL = "https://scripts.example.com"
+    return settings
+
+
+def test_the_two_webhooks_are_configured_separately():
+    assert notifications.ARRIVALS.url_setting == "DISCORD_ARRIVALS_WEBHOOK_URL"
+    assert notifications.WENT_ONLINE.url_setting == "DISCORD_ONLINE_WEBHOOK_URL"
+    assert notifications.ARRIVALS.mention_setting != notifications.WENT_ONLINE.mention_setting
+
+
+def test_a_deployment_goes_to_the_deployment_webhook(both, sent, deliveries):
+    notifications.announce_deployments([deploy()])
+    assert [webhook for webhook, _ in deliveries] == [notifications.WENT_ONLINE]
+
+
+def test_a_new_version_still_goes_to_its_own_webhook(both, sent, deliveries):
+    notifications.announce([make()])
+    assert [webhook for webhook, _ in deliveries] == [notifications.ARRIVALS]
+
+
+def test_a_batch_of_both_kinds_is_one_message_to_each_channel(both, sent, deliveries, monkeypatch):
+    monkeypatch.setattr(notifications, "describe", lambda version: version)
+    monkeypatch.setattr(notifications, "describe_deployment", lambda version: version)
+    with notifications.batched():
+        notifications.record(make(pk=1))
+        notifications.record_deployment(deploy(pk=2))
+        notifications.record(make(pk=3))
+    assert sorted(webhook.label for webhook, _ in deliveries) == ["arrivals", "online"]
+
+
+def test_deployments_are_silent_without_their_own_webhook(settings, sent, deliveries):
+    settings.DISCORD_ARRIVALS_WEBHOOK_URL = WEBHOOK
+    settings.DISCORD_ONLINE_WEBHOOK_URL = ""
+    assert notifications.announce_deployments([deploy()]) is False
+    assert deliveries == []
+
+
+def test_new_versions_are_silent_without_their_own_webhook(settings, sent, deliveries):
+    settings.DISCORD_ARRIVALS_WEBHOOK_URL = ""
+    settings.DISCORD_ONLINE_WEBHOOK_URL = ONLINE_WEBHOOK
+    assert notifications.announce([make()]) is False
+    assert deliveries == []
+
+
+def test_each_webhook_pings_only_its_own_mention(both, sent, deliveries):
+    both.DISCORD_ARRIVALS_WEBHOOK_MENTION = "<@&111111111111111111>"
+    both.DISCORD_ONLINE_WEBHOOK_MENTION = "<@&222222222222222222>"
+    notifications.announce([make()])
+    notifications.announce_deployments([deploy()])
+    by_label = {webhook.label: payload for webhook, payload in deliveries}
+    assert by_label["arrivals"]["allowed_mentions"]["roles"] == ["111111111111111111"]
+    assert by_label["online"]["allowed_mentions"]["roles"] == ["222222222222222222"]
+
+
+# --- Deployment messages ------------------------------------------------------------------
+
+
+def test_an_update_says_what_it_replaced(both, sent):
+    notifications.announce_deployments([deploy(name="Party Lines", version="1.2.0", replacing="1.1.0")])
+    embed = sent[0]["embeds"][0]
+    assert embed["title"] == "Now on the server: Party Lines"
+    assert embed["description"] == "**v1.2.0**, replacing v1.1.0"
+    assert embed["url"] == "https://scripts.example.com/script/1"
+    assert embed["color"] == notifications.COLOUR_ONLINE
+
+
+def test_a_first_deployment_says_so(both, sent):
+    notifications.announce_deployments([deploy(version="1.0.0", replacing=None)])
+    assert sent[0]["embeds"][0]["description"] == "**v1.0.0**, the first version of it on the server"
+
+
+def test_putting_an_older_version_back_is_a_rollback(both, sent):
+    notifications.announce_deployments([deploy(version="1.0.4", replacing="1.0.5")])
+    embed = sent[0]["embeds"][0]
+    assert embed["description"] == "**v1.0.4**, rolled back from v1.0.5"
+    assert embed["color"] == notifications.COLOUR_ROLLED_BACK
+
+
+def test_version_ordering_is_numeric_not_alphabetical():
+    # "1.0.10" sorts before "1.0.9" as text, which would call this upgrade a rollback.
+    assert deploy(version="1.0.10", replacing="1.0.9").rolled_back is False
+    assert deploy(version="1.0.9", replacing="1.0.10").rolled_back is True
+
+
+def test_it_says_who_marked_it_online(both, sent):
+    notifications.announce_deployments([deploy(by="lewis")])
+    assert sent[0]["embeds"][0]["footer"] == {"text": "Marked online by lewis"}
+
+
+def test_an_unknown_marker_leaves_the_footer_off(both, sent):
+    notifications.announce_deployments([deploy(by=None)])
+    assert "footer" not in sent[0]["embeds"][0]
+
+
+def test_a_username_is_shown_as_typed_in_the_footer(both, sent):
+    """Discord renders markdown in a description but not in a footer, which is plain text.
+
+    Escaping there would put visible backslashes in the name, so the footer is the one
+    place a username goes in verbatim. Mentions cannot fire from an embed either way.
+    """
+    notifications.announce_deployments([deploy(by="__lewis__")])
+    assert sent[0]["embeds"][0]["footer"]["text"] == "Marked online by __lewis__"
+
+
+def test_several_deployments_become_one_batch(both, sent):
+    notifications.announce_deployments(
+        [
+            deploy(pk=1, name="One", version="2.0.0", replacing="1.0.0"),
+            deploy(pk=2, name="Two", version="1.0.0", replacing=None),
+        ]
+    )
+    embed = sent[0]["embeds"][0]
+    assert embed["title"] == "2 scripts now on the server"
+    assert "replacing v1.0.0" in embed["description"]
+    assert "the first version of it on the server" in embed["description"]
+    assert embed["footer"] == {"text": "Marked online by lewis"}
+
+
+def test_a_deployment_batch_fits_discords_limits(both, sent):
+    worst = [deploy(pk=index, name="*" * 100, version="10.10.10", replacing="9.9.9") for index in range(60)]
+    notifications.announce_deployments(worst)
+    embed = sent[0]["embeds"][0]
+    assert len(embed["description"]) <= notifications.DESCRIPTION_LIMIT
+    assert "more" in embed["description"].rsplit("\n", 1)[-1]
+
+
+# --- Collapsing a batch of deployments ----------------------------------------------------
+
+
+def test_a_batch_reports_where_the_script_started_and_where_it_ended():
+    # Admin marks 1.0.4 then 1.0.5 online in one action, starting from 1.0.3.
+    collapsed = notifications.collapse_deployments(
+        [deploy(version="1.0.4", replacing="1.0.3"), deploy(version="1.0.5", replacing="1.0.4")]
+    )
+    assert len(collapsed) == 1
+    assert (collapsed[0].version, collapsed[0].replacing) == ("1.0.5", "1.0.3")
+
+
+def test_a_batch_that_ends_where_it_began_says_nothing(both, sent):
+    notifications.announce_deployments(
+        [deploy(version="1.0.4", replacing="1.0.3"), deploy(version="1.0.3", replacing="1.0.4")]
+    )
+    assert sent == []
+
+
+def test_deployments_of_different_scripts_are_kept_apart():
+    collapsed = notifications.collapse_deployments([deploy(pk=1), deploy(pk=2)])
+    assert sorted(item.script_pk for item in collapsed) == [1, 2]
+
+
+# --- Noticing a move to online ------------------------------------------------------------
+
+
+@pytest.fixture
+def stored(monkeypatch):
+    """What the database would say, without a database. Records every lookup made."""
+    state = {"status": models_offline(), "online": "1.0.4", "lookups": []}
+
+    def stored_status(pk):
+        state["lookups"].append(("status", pk))
+        return state["status"]
+
+    def online_version_of(script_id, excluding_pk):
+        state["lookups"].append(("online", script_id))
+        return state["online"]
+
+    monkeypatch.setattr(notifications, "_stored_status", stored_status)
+    monkeypatch.setattr(notifications, "_online_version_of", online_version_of)
+    return state
+
+
+def models_offline():
+    from scripts import models
+
+    return models.ScriptStatus.OFFLINE
+
+
+def a_version(status="online", pk=34, version="1.0.5"):
+    from scripts import models
+
+    script = models.Script(pk=12, name="Assigned Mutant at Birth", slug=None)
+    return models.ScriptVersion(pk=pk, script=script, version=version, status=status)
+
+
+@pytest.fixture
+def deployments_recorded(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(notifications, "record_deployment", recorded.append)
+    return recorded
+
+
+def save(instance, **kwargs):
+    """Run the pre- and post-save hooks around an imaginary save."""
+    notifications.note_status_before_save(None, instance, **kwargs)
+    notifications.announce_went_online(None, instance)
+
+
+def test_marking_a_version_online_is_announced(both, stored, deployments_recorded):
+    version = a_version(status="online")
+    save(version)
+    assert deployments_recorded == [version]
+    assert version._replacing == "1.0.4"
+
+
+def test_saving_a_version_that_was_already_online_is_not(both, stored, deployments_recorded):
+    stored["status"] = "online"
+    save(a_version(status="online"))
+    assert deployments_recorded == []
+
+
+def test_saving_a_version_as_offline_is_not(both, stored, deployments_recorded):
+    save(a_version(status="offline"))
+    assert deployments_recorded == []
+    assert stored["lookups"] == []
+
+
+def test_a_save_that_does_not_write_the_status_is_not(both, stored, deployments_recorded):
+    save(a_version(status="online"), update_fields=["notes"])
+    assert deployments_recorded == []
+
+
+def test_loading_fixtures_is_not(both, stored, deployments_recorded):
+    save(a_version(status="online"), raw=True)
+    assert deployments_recorded == []
+
+
+def test_without_the_deployment_webhook_nothing_is_looked_up(settings, stored, deployments_recorded):
+    settings.DISCORD_ONLINE_WEBHOOK_URL = ""
+    save(a_version(status="online"))
+    assert deployments_recorded == []
+    assert stored["lookups"] == [], "queried the database for a webhook nobody configured"
+
+
+def test_saving_the_same_instance_twice_announces_once(both, stored, deployments_recorded):
+    version = a_version(status="online")
+    save(version)
+    # The first save stored it as online.
+    stored["status"] = "online"
+    save(version)
+    assert len(deployments_recorded) == 1
+
+
+def test_a_brand_new_version_saved_as_online_is_announced(both, stored, deployments_recorded):
+    stored["status"] = None
+    save(a_version(status="online", pk=None))
+    assert len(deployments_recorded) == 1
+
+
+# --- Who did it ---------------------------------------------------------------------------
+
+
+class _User:
+    is_authenticated = True
+
+    def __init__(self, name):
+        self.name = name
+
+    def get_username(self):
+        return self.name
+
+
+class _Anonymous:
+    is_authenticated = False
+
+    def get_username(self):
+        return ""
+
+
+def test_the_person_changing_the_status_is_named(both):
+    version = a_version()
+    version._replacing = "1.0.4"
+    notifications.note_changed_by(version, _User("lewis"))
+    assert notifications.describe_deployment(version).by == "lewis"
+
+
+@pytest.mark.parametrize("user", [None, _Anonymous()])
+def test_nobody_in_particular_is_not_named(both, user):
+    version = a_version()
+    notifications.note_changed_by(version, user)
+    assert notifications.describe_deployment(version).by is None
+
+
+def test_a_deployment_links_to_the_script(both):
+    deployment = notifications.describe_deployment(a_version())
+    assert deployment.path == "/script/12"
+    assert deployment.name == "Assigned Mutant at Birth"
+    assert deployment.version == "1.0.5"
+
+
+# --- Wiring -------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "signal_name, dispatch_uid, receiver_name",
+    [
+        ("pre_save", "note_status_before_save", "note_status_before_save"),
+        ("post_save", "announce_went_online", "announce_went_online"),
+    ],
+)
+def test_the_deployment_hooks_are_connected_at_startup(signal_name, dispatch_uid, receiver_name):
+    from django.db.models import signals
+
+    from scripts import models
+
+    signal = getattr(signals, signal_name)
+    was_connected = signal.disconnect(dispatch_uid=dispatch_uid, sender=models.ScriptVersion)
+    if was_connected:
+        signal.connect(getattr(notifications, receiver_name), sender=models.ScriptVersion, dispatch_uid=dispatch_uid)
+    assert was_connected, f"{receiver_name} is not connected to {signal_name}"
+
+
+def test_every_admin_route_names_who_marked_it_online():
+    """The bulk action, the change form and the inline status column all attribute."""
+    import inspect
+
+    from scripts import admin
+
+    assert "note_changed_by" in inspect.getsource(admin.mark_on_server)
+    assert "batched()" in inspect.getsource(admin.mark_on_server)
+    assert "note_changed_by" in inspect.getsource(admin.ScriptVersionAdmin.save_model)
+    assert "batched()" in inspect.getsource(admin.ScriptVersionAdmin.changelist_view)
+
+
+def test_the_status_button_names_who_pressed_it():
+    import inspect
+
+    from scripts import views
+
+    source = inspect.getsource(views.set_script_status)
+    # Before the save, or the save has already been announced without a name.
+    assert source.index("note_changed_by") < source.index(".save(")
+
+
+# --- manage.py test_notification ----------------------------------------------------------
+
+
+@pytest.fixture
+def samples(monkeypatch):
+    """Which webhooks the command sent to, without sending anything."""
+    calls = []
+    outcome = {"arrivals": True, "online": True}
+
+    def arrivals(items):
+        calls.append(("arrivals", len(items)))
+        return outcome["arrivals"]
+
+    def online(items):
+        calls.append(("online", len(items)))
+        return outcome["online"]
+
+    monkeypatch.setattr(notifications, "announce", arrivals)
+    monkeypatch.setattr(notifications, "announce_deployments", online)
+    return {"calls": calls, "outcome": outcome}
+
+
+def run_command(*args):
+    import io
+
+    from django.core.management import call_command
+
+    out = io.StringIO()
+    call_command("test_notification", *args, stdout=out)
+    return out.getvalue()
+
+
+def test_with_no_flag_every_configured_webhook_is_tested(both, samples):
+    output = run_command()
+    assert [name for name, _ in samples["calls"]] == ["arrivals", "online"]
+    assert "Sent to the arrivals webhook" in output
+    assert "Sent to the online webhook" in output
+
+
+def test_with_no_flag_an_unset_webhook_is_skipped_not_an_error(both, samples):
+    both.DISCORD_ONLINE_WEBHOOK_URL = ""
+    output = run_command()
+    assert [name for name, _ in samples["calls"]] == ["arrivals"]
+    assert "DISCORD_ONLINE_WEBHOOK_URL is not set — skipping the online webhook" in output
+
+
+def test_with_no_flag_and_nothing_configured_it_is_an_error(both, samples):
+    from django.core.management.base import CommandError
+
+    both.DISCORD_ARRIVALS_WEBHOOK_URL = ""
+    both.DISCORD_ONLINE_WEBHOOK_URL = ""
+    with pytest.raises(CommandError, match="Neither"):
+        run_command()
+    assert samples["calls"] == []
+
+
+@pytest.mark.parametrize("flag, expected", [("--arrivals", ["arrivals"]), ("--online", ["online"])])
+def test_a_flag_tests_only_that_webhook(both, samples, flag, expected):
+    run_command(flag)
+    assert [name for name, _ in samples["calls"]] == expected
+
+
+@pytest.mark.parametrize(
+    "flag, setting",
+    [("--arrivals", "DISCORD_ARRIVALS_WEBHOOK_URL"), ("--online", "DISCORD_ONLINE_WEBHOOK_URL")],
+)
+def test_naming_an_unset_webhook_is_an_error(both, samples, flag, setting):
+    from django.core.management.base import CommandError
+
+    setattr(both, setting, "")
+    with pytest.raises(CommandError, match=setting):
+        run_command(flag)
+    assert samples["calls"] == []
+
+
+def test_naming_both_checks_both_before_sending_either(both, samples):
+    from django.core.management.base import CommandError
+
+    both.DISCORD_ONLINE_WEBHOOK_URL = ""
+    with pytest.raises(CommandError, match="DISCORD_ONLINE_WEBHOOK_URL"):
+        run_command("--arrivals", "--online")
+    assert samples["calls"] == [], "sent to arrivals before finding online unset"
+
+
+def test_batch_sends_the_several_at_once_form_to_each(both, samples):
+    run_command("--batch")
+    assert dict(samples["calls"]) == {"arrivals": 2, "online": 3}
+
+
+def test_one_refused_webhook_fails_the_command_but_the_other_still_sends(both, samples):
+    from django.core.management.base import CommandError
+
+    samples["outcome"]["online"] = False
+    with pytest.raises(CommandError, match="The online webhook did not accept it"):
+        run_command()
+    assert [name for name, _ in samples["calls"]] == ["arrivals", "online"]

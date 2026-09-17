@@ -10,7 +10,7 @@ from django.utils.encoding import force_bytes
 from django.utils.html import format_html
 from django.utils.http import urlsafe_base64_encode
 
-from scripts import models, slugs, upstream
+from scripts import models, notifications, slugs, upstream
 
 
 class ScriptAdminForm(forms.ModelForm):
@@ -67,12 +67,15 @@ class ScriptAdmin(admin.ModelAdmin):
 @admin.action(description="Mark selected versions as live on the Minecraft server")
 def mark_on_server(modeladmin, request, queryset):
     # One at a time through save(), not queryset.update(), which bypasses it — save() is
-    # what takes the script's previously online version off the server.
+    # what takes the script's previously online version off the server, and what tells
+    # the deployment webhook. Batched so a whole selection is one Discord message.
     updated = 0
-    for version in queryset:
-        version.status = models.ScriptStatus.ONLINE
-        version.save(update_fields=["status"])
-        updated += 1
+    with notifications.batched():
+        for version in queryset:
+            version.status = models.ScriptStatus.ONLINE
+            notifications.note_changed_by(version, request.user)
+            version.save(update_fields=["status"])
+            updated += 1
     modeladmin.message_user(request, f"{updated} version(s) marked online.", level=messages.SUCCESS)
 
 
@@ -90,6 +93,17 @@ class ScriptVersionAdmin(admin.ModelAdmin):
     list_filter = ["status", "latest", "script_type"]
     search_fields = ["script__name", "author"]
     actions = [mark_on_server, mark_off_server]
+
+    def save_model(self, request, obj, form, change):
+        # Covers the change form and the inline status column on the list, so an
+        # announcement from either says who marked the version online.
+        notifications.note_changed_by(obj, request.user)
+        super().save_model(request, obj, form, change)
+
+    def changelist_view(self, request, extra_context=None):
+        # Several status cells edited in one submit become one Discord message.
+        with notifications.batched():
+            return super().changelist_view(request, extra_context)
 
 
 admin.site.register(models.ClocktowerCharacter)

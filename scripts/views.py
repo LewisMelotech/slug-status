@@ -37,6 +37,7 @@ from scripts import (
     filters,
     forms,
     models,
+    notifications,
     script_json,
     serializers,
     server_status,
@@ -1594,6 +1595,7 @@ def set_script_status(request, pk: int):
         messages.error(request, f"'{requested}' is not a status.")
     else:
         version.status = requested
+        notifications.note_changed_by(version, request.user)
         version.save(update_fields=["status"])
         wording = "live on the server" if requested == models.ScriptStatus.ONLINE else "off the server"
         messages.success(request, f"{version.script.name} v{version.version} is now marked {wording}.")

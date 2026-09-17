@@ -43,6 +43,9 @@ Grant it in the Django admin → Users → the user → Permissions →
 
 Changing a status is POST-only, so it cannot happen by following or prefetching a link.
 
+Marking a version online can also be announced to a Discord channel of its own, naming what
+it replaced and who did it. See `DISCORD_ONLINE_WEBHOOK_URL` in `NOTIFICATIONS.md`.
+
 ### The two tabs on the Server page
 
 Every version that is not online is "offline", but that covers two unrelated things, so
