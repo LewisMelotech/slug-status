@@ -36,6 +36,7 @@ from scripts import (
     constants,
     filters,
     forms,
+    minecraft,
     models,
     notifications,
     script_json,
@@ -293,6 +294,7 @@ class ScriptView(generic.DetailView):
             f"https://script.bloodontheclocktower.com?script={script_json.compress_json(current_script.content)}"
         )
         context["bootlegger_rules"] = script_json.get_bootlegger_rules_from_json(current_script.content)
+        context["minecraft_commands"] = minecraft.commands_for(current_script.script.slug)
 
         return context
 

@@ -1,0 +1,61 @@
+{% comment %}
+The "Minecraft CMD" menu on a script's page: each command copies to the clipboard.
+
+Renders nothing when minecraft_commands is empty, which is every script without a custom
+id — the server's commands are named after one. Uses showAndDismissAlert from
+script.html when it is there, and a plain alert otherwise, so the include does not
+break if it is ever used on a page without it.
+{% endcomment %}
+{% if minecraft_commands %}
+    <div class="col-md-auto p-1">
+        <div class="dropdown">
+            <button class="btn btn-primary dropdown-toggle" type="button" id="minecraftCommands" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">Minecraft CMD</button>
+            <div class="dropdown-menu" aria-labelledby="minecraftCommands" style="max-width: calc(100vw - 2rem);">
+                {% for command in minecraft_commands %}
+                    <button type="button" class="dropdown-item text-truncate" title="Copy {{ command }}" data-minecraft-command="{{ command }}" onclick="copyMinecraftCommand(this)"><code>{{ command }}</code></button>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    <script>
+        function copyBySelection(text) {
+            var field = document.createElement("textarea");
+            field.value = text;
+            field.setAttribute("readonly", "");
+            field.style.position = "fixed";
+            field.style.opacity = "0";
+            document.body.appendChild(field);
+            field.select();
+            var copied = false;
+            try {
+                copied = document.execCommand("copy");
+            } catch (error) {
+                copied = false;
+            }
+            document.body.removeChild(field);
+            return copied;
+        }
+
+        function copyTextToClipboard(text) {
+            // The Clipboard API first. It is missing outside https and localhost, and can be
+            // refused even where it exists (embedded browsers, some privacy settings), so in
+            // either case the older selection copy gets a turn before giving up.
+            var viaApi = navigator.clipboard && window.isSecureContext
+                ? navigator.clipboard.writeText(text)
+                : Promise.reject(new Error("no clipboard API here"));
+            return viaApi.catch(function () {
+                if (!copyBySelection(text)) {
+                    throw new Error("copy refused");
+                }
+            });
+        }
+
+        function copyMinecraftCommand(button) {
+            var notify = typeof showAndDismissAlert === "function" ? showAndDismissAlert : window.alert;
+            copyTextToClipboard(button.getAttribute("data-minecraft-command")).then(
+                function () { notify("Minecraft command copied to clipboard"); },
+                function () { notify("Could not copy. Select the command and copy it by hand."); }
+            );
+        }
+    </script>
+{% endif %}
