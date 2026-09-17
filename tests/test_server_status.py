@@ -285,6 +285,8 @@ def test_the_templates_compile(template):
     [
         ("server_queue", {}),
         ("script", {"pk": 12}),
+        # The "On the server" cell links to the exact version that is deployed.
+        ("script", {"pk": 12, "version": "1.0.4"}),
         ("set_script_status", {"pk": 34}),
         ("download_json", {"pk": 12, "version": "1.0.0"}),
         ("download_pdf", {"pk": 12, "version": "1.0.0"}),
@@ -311,3 +313,59 @@ def test_putting_a_version_online_is_one_transaction():
     atomic = source.index("with transaction.atomic():")
     assert atomic < source.index("super().save(")
     assert atomic < source.index("update(status=ScriptStatus.OFFLINE)")
+
+
+def _queue_row(pk, name, version, online=None):
+    from datetime import UTC, datetime
+
+    script = models.Script(pk=pk, name=name)
+    row = models.ScriptVersion(pk=pk * 10, script=script, version=version, author="Sinilintu7")
+    row.created = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
+    row.currently_online = models.ScriptVersion(pk=pk * 10 - 1, script=script, version=online) if online else None
+    return row
+
+
+def _render_queue(versions, superseded=False):
+    from django.template.loader import render_to_string
+
+    return render_to_string(
+        "server_queue.html",
+        {
+            "versions": versions,
+            "is_paginated": False,
+            "showing_superseded": superseded,
+            "awaiting_count": len(versions),
+            "superseded_count": 0,
+            "online_count": 1,
+        },
+    )
+
+
+def test_the_version_on_the_server_links_to_that_exact_version(rendering):
+    """Not the script's page, which shows the latest — the deployed version is older."""
+    html = _render_queue([_queue_row(7, "Assigned Mutant at Birth", "1.0.6", online="1.0.4")])
+    assert '<a href="/script/7/1.0.4">1.0.4</a>' in html
+
+
+def test_nothing_on_the_server_is_not_a_link(rendering):
+    import re
+
+    html = _render_queue([_queue_row(9, "Calls Casting", "1.0.0")])
+    cell = re.search(r"<td>\s*<span class=\"text-muted\">nothing yet</span>\s*</td>", html)
+    assert cell, "the 'nothing yet' cell is missing or has been turned into a link"
+
+
+def test_on_the_superseded_tab_each_version_links_to_itself(rendering):
+    """The script name opens the latest, which on this tab is never the row's own version."""
+    html = _render_queue(
+        [_queue_row(5, "The Passage of Time", "1.0.0", online="2.3.2")],
+        superseded=True,
+    )
+    assert '<a href="/script/5/1.0.0">1.0.0</a>' in html, "the superseded version is not linked"
+    assert '<a href="/script/5/2.3.2">2.3.2</a>' in html, "the version on the server is not linked"
+
+
+def test_on_the_deploying_tab_both_versions_in_a_row_are_links(rendering):
+    html = _render_queue([_queue_row(7, "Assigned Mutant at Birth", "1.0.6", online="1.0.4")])
+    assert '<a href="/script/7/1.0.6">1.0.6</a>' in html
+    assert '<a href="/script/7/1.0.4">1.0.4</a>' in html

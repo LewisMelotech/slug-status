@@ -59,10 +59,10 @@
       {% for version in versions %}
       <tr>
         <td><a href="{% url 'script' pk=version.script.pk %}">{{ version.script.name }}</a></td>
-        <td>{{ version.version }}</td>
+        <td><a href="{% url 'script' pk=version.script.pk version=version.version %}">{{ version.version }}</a></td>
         <td>
           {% if version.currently_online %}
-            {{ version.currently_online.version }}
+            <a href="{% url 'script' pk=version.script.pk version=version.currently_online.version %}">{{ version.currently_online.version }}</a>
           {% else %}
             <span class="text-muted">{% trans 'nothing yet' %}</span>
           {% endif %}
