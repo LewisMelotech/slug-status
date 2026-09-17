@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from django.contrib.auth.models import User
 from django.contrib.postgres.indexes import GinIndex
-from django.db import models
+from django.db import models, transaction
 from versionfield import VersionField
 
 from scripts import constants, slugs
@@ -216,13 +216,18 @@ class ScriptVersion(models.Model):
         # one online takes whichever was there off. Enforced here rather than in the
         # view so the admin, the shell and anything written later cannot end up with two
         # versions both claiming to be deployed. None online is still fine.
-        super().save(*args, **kwargs)
-        if self.status == ScriptStatus.ONLINE:
-            # plain_objects, not objects: the default manager annotates, and an annotated
-            # queryset cannot be used for update().
-            ScriptVersion.plain_objects.filter(
-                script_id=self.script_id, status=ScriptStatus.ONLINE
-            ).exclude(pk=self.pk).update(status=ScriptStatus.OFFLINE)
+        #
+        # Both writes in one transaction. Without it there is a moment with two versions
+        # online, and whatever runs on commit runs inside that moment — the Discord
+        # announcements included, which would make the demotion wait on Discord and never
+        # happen at all if the worker died mid-request.
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            if self.status == ScriptStatus.ONLINE:
+                # plain_objects, not objects: the default manager annotates, and an
+                # annotated queryset cannot be used for update().
+                others = ScriptVersion.plain_objects.filter(script_id=self.script_id, status=ScriptStatus.ONLINE)
+                others.exclude(pk=self.pk).update(status=ScriptStatus.OFFLINE)
 
     class Meta:
         permissions = [

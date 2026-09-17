@@ -295,3 +295,19 @@ def test_the_urls_the_server_page_reverses_exist(name, args):
     from django.urls import reverse
 
     assert reverse(name, kwargs=args)
+
+
+def test_putting_a_version_online_is_one_transaction():
+    """The save and taking the previous version off must commit together.
+
+    Otherwise there is a moment with two versions online, and on-commit work — the
+    Discord deployment announcement — runs inside it: verified against a real database,
+    the non-atomic version had two online at the moment Discord was contacted. If the
+    worker died during that call, the demotion never ran at all.
+    """
+    from scripts.models import ScriptVersion
+
+    source = inspect.getsource(ScriptVersion.save)
+    atomic = source.index("with transaction.atomic():")
+    assert atomic < source.index("super().save(")
+    assert atomic < source.index("update(status=ScriptStatus.OFFLINE)")
