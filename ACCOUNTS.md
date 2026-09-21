@@ -19,10 +19,28 @@ and add `"email"` to `ACCOUNT_LOGIN_METHODS` in `botc/settings.py`.
 
 ## Closing signup
 
-`LOCAL_SIGNUP_ENABLED=False` closes registration without affecting login, so you can
-invite people by hand while everyone who already has an account keeps getting in. Create
-accounts yourself in the Django admin, then hand each person a reset link (below) so they
-choose their own password and you never learn it.
+Registration has two switches, one for each way in, and they are independent:
+
+| `LOCAL_SIGNUP_ENABLED` | `SOCIAL_SIGNUP_ENABLED` | Who can register |
+|---|---|---|
+| `True` | `True` | Anyone, with a username and password or with a provider. **The default** |
+| `True` | `False` | Username and password only |
+| `False` | `True` | A social provider only |
+| `False` | `False` | Nobody: you invite people by hand |
+
+Both close **registration**, not login. Everyone who already has an account keeps getting
+in whichever way they made it, and someone with a provider account can still sign in with
+it when `SOCIAL_SIGNUP_ENABLED` is `False` — the switch is only asked of someone who has
+no account yet. A visitor turned away sees a "Sign Up Closed" page.
+
+Write them exactly `True` or `False`, capitalised, as with every switch in this project:
+anything else, including `true`, counts as `False` and closes that route.
+
+`SOCIAL_SIGNUP_ENABLED` only matters for providers you have configured. With no
+`SocialApp` there is no provider button, and so nothing for the switch to close.
+
+To invite people by hand, create their accounts in the Django admin, then hand each person
+a reset link (below) so they choose their own password and you never learn it.
 
 ## Resetting a password
 

@@ -194,12 +194,15 @@ ACCOUNT_SIGNUP_FIELDS = ["username*", "password1*", "password2*"]
 SOCIALACCOUNT_AUTO_SIGNUP = True
 SOCIALACCOUNT_LOGIN_ON_GET = True
 
-# Local username/password accounts, alongside the social providers. Signup closes
-# independently of login, so an instance can invite by hand while existing users still
-# get in. Verification defaults to none because a self-hosted instance rarely has SMTP;
-# with the console backend a verification mail would only reach the container log.
+# Local username/password accounts, alongside the social providers. Each kind of signup
+# has its own switch and closes independently of login, so an instance can allow one kind
+# and not the other, or invite by hand, while existing users still get in. Verification
+# defaults to none because a self-hosted instance rarely has SMTP; with the console
+# backend a verification mail would only reach the container log.
 ACCOUNT_ADAPTER = "scripts.adapters.LocalAccountAdapter"
+SOCIALACCOUNT_ADAPTER = "scripts.adapters.SocialAccountAdapter"
 LOCAL_SIGNUP_ENABLED = os.getenv("LOCAL_SIGNUP_ENABLED", "True") == "True"
+SOCIAL_SIGNUP_ENABLED = os.getenv("SOCIAL_SIGNUP_ENABLED", "True") == "True"
 ACCOUNT_EMAIL_VERIFICATION = os.getenv("ACCOUNT_EMAIL_VERIFICATION", "none")
 EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
 
