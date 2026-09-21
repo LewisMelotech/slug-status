@@ -7,9 +7,11 @@
 
 {% if filter %}
 <form action="" method="get" class="form mb-0">
-    {# Marks a real filter submission. Sorting and pagination links carry query params
-       too, so without this the view cannot tell "the user unticked a box" from "the
-       user clicked a column header", and the defaults would be lost on every sort. #}
+    {% comment %}
+        Marks a real filter submission. Sorting and pagination links carry query params
+        too, so without this the view cannot tell "the user unticked a box" from "the
+        user clicked a column header", and the defaults would be lost on every sort.
+    {% endcomment %}
     <input type="hidden" name="filtered" value="1">
     <div class="form-group row p-1 mb-0">
         {% bootstrap_form filter.form exclude='tags' layout='inline' form_group_class="mb-0 m-1" %}
