@@ -1,7 +1,10 @@
 """Pull new versions for every script linked to an upstream instance.
 
 Safe to run on a timer: it only ever adds versions upstream has and this instance does
-not, and a script whose upstream copy has not changed costs one request.
+not. It is not cheap, though. Each linked script costs one request for itself and two for
+every version it has, held or not, changed or not, so the interval is a courtesy to the
+other server as much as a choice about freshness. The stack's `sync` service runs it
+hourly.
 """
 
 from django.core.management.base import BaseCommand, CommandError

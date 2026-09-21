@@ -47,9 +47,19 @@ docker compose exec botc-scripts python manage.py sync_upstream
 ```
 
 It only ever **adds** versions. It never edits or deletes what you already hold, so local
-edits are safe, and a script that has not changed upstream costs one request. The newest
-version imported takes the `latest` flag, exactly as an upload would; older versions file
-in behind without disturbing it.
+edits are safe. The newest version imported takes the `latest` flag, exactly as an upload
+would; older versions file in behind without disturbing it. Like every upload, what it adds
+arrives `offline`, so a sync never changes what the Discord bot serves until someone puts
+the version on the server.
+
+Sync asks for **every** version the source holds, not only the newest, so a script
+imported with just its latest version gains its older ones on the first sync.
+
+**What a sync costs the other server.** A linked script is asked about in full whether or
+not it has changed: one request for the script, then two for each of its versions — the
+version itself and its PDF — including versions you already hold. A script with three
+versions is seven requests, every run. That is worth knowing before you link a lot of
+scripts, and it is why `--no-link` exists for a copy you do not need to follow.
 
 Useful flags:
 
@@ -66,11 +76,24 @@ python manage.py import_script 134 --no-link
 
 ### On a timer
 
-`sync_upstream` is designed to be run by cron on the host. Daily is plenty — scripts do
-not change often, and the public site is someone else's server:
+The stack's `sync` service runs it for you, **hourly**. It calls `sync_upstream` every
+`SYNC_PERIOD` seconds (`3600` by default) counted from the clock, not from when the
+container started, so a restart does not shift the schedule. A version published upstream
+therefore reaches the Server page's *Needs deploying* tab within the hour. A failed run is
+logged and the schedule carries on, since someone else's server being down should not stop
+it. Watch it with `docker compose logs sync`.
+
+`SYNC_ON_START=true` also runs one pass at start-up. It is off by default: the stack is
+restarted repeatedly while being set up, and every restart would be another full pass over
+someone else's server for no new data.
+
+A run announces to Discord once, however many scripts gained a version — see
+`NOTIFICATIONS.md`.
+
+Without the `sync` service, run it from cron on the host instead, hourly to match:
 
 ```sh
-0 4 * * * cd /path/to/discord-botc-script-bot/stack && docker compose exec -T botc-scripts python manage.py sync_upstream
+0 * * * * cd /path/to/discord-botc-script-bot/stack && docker compose exec -T botc-scripts python manage.py sync_upstream
 ```
 
 ## From the web UI
