@@ -80,3 +80,20 @@ def test_reserved_slugs_are_all_reachable():
     """
     unreachable = [slug for slug in RESERVED_SLUGS if not SLUG_PATTERN.match(slug)]
     assert unreachable == []
+
+
+def test_a_blank_slug_filter_is_the_unfiltered_list_and_a_real_one_narrows_it():
+    """Pins what filter_slug's guard comment says, since the guard itself is unreachable.
+
+    A blank ?slug= never reaches the method, because django-filter skips empty values and
+    the form strips whitespace first. So it is the plain list, like any other empty filter.
+    """
+    from scripts import filters, models
+
+    def narrowed(raw):
+        result = filters.ScriptFilter(data={"slug": raw}, queryset=models.Script.objects.all())
+        return bool(result.qs.query.where.children)
+
+    assert narrowed("") is False
+    assert narrowed("   ") is False
+    assert narrowed("sects") is True

@@ -57,9 +57,10 @@ Each row shows what is currently online beside it, so an update reads as "1.0.5,
 1.0.4" and a first deployment reads as "nothing yet". Newest first, because what just
 arrived is usually what needs doing — and a Discord announcement links straight here.
 
-**Superseded** is everything else: older versions of scripts that already have a newer one
-online. Deploying an update takes the previous version off the server, so this tab gains a
-row every time the feature is used correctly, and never shrinks. Nothing here needs doing.
+**Superseded** is everything else: the older versions that are not on the server, whether
+or not anything of that script is. Deploying an update takes the previous version off the
+server, so this tab gains a row every time the feature is used correctly, and never
+shrinks. Nothing here needs doing.
 
 They are separate because the second grows without limit and the first does not. On a
 41-script instance the split was 8 outstanding against 25 superseded, and a single list

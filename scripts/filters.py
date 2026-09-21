@@ -210,8 +210,10 @@ class ScriptFilter(filters.FilterSet):
     def filter_slug(self, queryset, _, value):
         slug = slugs.normalise_slug(value)
         if not slug:
-            # A blank slug is not "every unslugged script": ?slug= with nothing
-            # useful in it must never quietly return the whole table.
+            # A guard rather than a path the API takes today: django-filter skips this method
+            # for an empty value, and the form strips whitespace first, so ?slug= and
+            # ?slug=%20 are both the unfiltered list, as with any other empty filter. Were
+            # that ever to change, a blank slug must not become "every unslugged script".
             return queryset.none()
         return queryset.filter(slug=slug)
 

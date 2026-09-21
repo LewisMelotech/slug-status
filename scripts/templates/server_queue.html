@@ -28,10 +28,10 @@
 
 {% if showing_superseded %}
 <p class="text-muted">
-  Older versions of scripts that already have a newer one on the server. Deploying an
-  update takes the previous version off, so these collect here and nothing needs doing
-  about them. Marking one online puts it back and takes the current one off, which is how
-  you roll a script back.
+  Older versions that are not on the server, whether or not anything of that script is.
+  Deploying an update takes the previous version off, so these collect here and nothing
+  needs doing about them. Marking one online puts it back and takes the current one off,
+  which is how you roll a script back.
 </p>
 {% else %}
 <p class="text-muted">
@@ -106,7 +106,7 @@
 
 {% else %}
   {% if showing_superseded %}
-  <p>Nothing here — no script has had a version replaced on the server yet.</p>
+  <p>Nothing here — no script has an older version that is off the server.</p>
   {% else %}
   <p>Nothing waiting — the newest version of every script is the one on the server.</p>
   {% endif %}

@@ -36,7 +36,7 @@ class Command(BaseCommand):
             scripts = upstream.linked_scripts()
 
         if not scripts:
-            self.stdout.write("No linked scripts. Import one with --link first.")
+            self.stdout.write("No linked scripts. Import one with import_script first; linking is the default.")
             return
 
         # One Discord announcement for the whole run, covering every script that gained a

@@ -148,15 +148,16 @@ Announcements are best effort and never load-bearing. A webhook that is unreacha
 revoked or rejected is logged in the container and otherwise ignored — an upload still
 succeeds, and a sync still finishes. Nothing is retried and nothing is queued for later,
 so an announcement lost while Discord was down stays lost. The script itself is safe; it
-is sitting on the site either way, and `/server` lists everything not yet on the Minecraft
-server whether or not its arrival was ever announced.
+is sitting on the site either way, and `/server` lists what still needs putting on the
+Minecraft server (the newest version of each script that is not on it) whether or not its
+arrival was ever announced.
 
 Failures are logged at WARNING. The webhook URL is never written to the log.
 
 ## What it does not do
 
-It does not tell you what still needs deploying — only what has just arrived. `/server` is
-the standing list, and it does not depend on anyone having seen a message.
+It does not tell you what still needs deploying — only what has just arrived. `/server`'s
+*Needs deploying* tab is the standing list, and it does not depend on anyone having seen a message.
 
 Nothing is announced when a version is marked offline, deleted, or edited in place. The
 arrivals webhook covers new scripts and versions, and the deployment webhook covers versions

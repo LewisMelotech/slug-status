@@ -27,9 +27,11 @@ field, so every write path gets them: the API, the Django admin, and any
 
 ## API
 
-Reads are anonymous, as they were before. Writes need HTTP Basic auth as a user
-holding the **`scripts.api_write_permission`** permission — the same credential
-the existing upload API uses. No new permission, no new auth scheme.
+Reads are anonymous, as they were before. Writes need a user holding the
+**`scripts.api_write_permission`** permission, which is what the existing upload API
+needs too. No new permission, no new auth scheme. Clients such as the Discord bot send
+HTTP Basic; the API sets no authentication classes of its own, so DRF's defaults also
+accept a signed-in browser session, with CSRF checked.
 
 ### Look up a script by slug
 
