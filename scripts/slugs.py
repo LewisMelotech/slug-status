@@ -30,8 +30,10 @@ SLUG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 # "script/" in scripts/urls.py, which is the shadowing that can actually happen;
 # the second are the action segments that follow a script in a URL, reserved so
 # that /script/<slug>/<action> stays unambiguous if such routes are ever added;
-# the third are the site's top-level segments, reserved so that a slug can never
-# read as a link to somewhere else entirely.
+# the third are the site's top-level segments, including the social login routes
+# (discord/, google/), reserved so that a slug can never read as a link to somewhere
+# else entirely. tests/test_slugs.py checks the second and third against the URL table,
+# so a route added later fails there instead of quietly missing from this list.
 #
 # Route segments containing an underscore or a dot ("all_roles", "download_pdf",
 # "robots.txt") are already unreachable under SLUG_PATTERN and are deliberately
@@ -63,14 +65,18 @@ RESERVED_SLUGS = frozenset(
         "collections",
         "comment",
         "comments",
+        "discord",
+        "google",
         "health-check",
         "login",
         "logout",
         "media",
+        "password",
         "robots",
         "script",
         "script-ids",
         "scripts",
+        "server",
         "signup",
         "static",
         "statistics",

@@ -82,6 +82,50 @@ def test_reserved_slugs_are_all_reachable():
     assert unreachable == []
 
 
+def _route_segments():
+    """(first, second) path segment of every route the site serves, from the real URL table."""
+    import re
+
+    from django.urls import get_resolver
+    from django.urls.resolvers import URLResolver
+
+    def walk(patterns, prefix):
+        for entry in patterns:
+            text = prefix + str(entry.pattern).lstrip("^")
+            if isinstance(entry, URLResolver):
+                yield from walk(entry.url_patterns, text)
+            else:
+                parts = re.split(r"/", text.replace("$", ""), maxsplit=2)
+                yield (parts + ["", ""])[:2]
+
+    return set(map(tuple, walk(get_resolver().url_patterns, "")))
+
+
+def test_every_top_level_route_segment_is_reserved():
+    """A slug that read as a site route would look like a link to somewhere else entirely.
+
+    Taken from the URL table itself, so a route added later fails here instead of
+    quietly being left off the list, which is how "server" and "password" were.
+    """
+    reachable = {
+        first
+        for first, _ in _route_segments()
+        # Only segments a slug could be: "robots.txt" and "all_roles" are unreachable anyway.
+        if SLUG_PATTERN.match(first)
+    }
+
+    assert reachable - RESERVED_SLUGS == set()
+
+
+def test_every_literal_child_of_script_is_reserved():
+    """/script/<slug> is registered last, so a literal route under script/ would be shadowed."""
+    literal_children = {
+        second for first, second in _route_segments() if first == "script" and SLUG_PATTERN.match(second)
+    }
+
+    assert literal_children - RESERVED_SLUGS == set()
+
+
 def test_a_blank_slug_filter_is_the_unfiltered_list_and_a_real_one_narrows_it():
     """Pins what filter_slug's guard comment says, since the guard itself is unreachable.
 
