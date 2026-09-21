@@ -1497,6 +1497,7 @@ class ScriptImportView(generic.FormView):
                 source=form.cleaned_data["source"],
                 link=form.cleaned_data.get("link", False),
                 all_versions=form.cleaned_data.get("all_versions", False),
+                user=self.request.user,
             )
         except upstream.UpstreamError as exc:
             form.add_error("reference", str(exc))

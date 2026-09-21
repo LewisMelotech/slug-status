@@ -26,7 +26,8 @@ python manage.py import_script 7 --source http://botc-scripts:8000
 What comes across: the script name, author, version, script type, the JSON content, and
 the PDF when upstream has one. Character counts, edition and homebrew status are
 recalculated locally by the same code the upload form uses, so an imported script is
-indistinguishable from an uploaded one.
+stored like an uploaded one, and adding to an existing script follows the same
+[ownership rule](#who-may-import-into-an-existing-script).
 
 By default only the **latest** version is imported. For the full history:
 
@@ -104,7 +105,9 @@ whether to keep it linked, and submit — the imported script's page opens with 
 of what came across.
 
 It is open to whoever may upload, including anonymous visitors, because importing a
-script someone else published is the same act as uploading it by hand.
+script someone else published is the same act as uploading it by hand. That includes the
+ownership rule an upload has, described under
+[Who may import into an existing script](#who-may-import-into-an-existing-script).
 
 What is restricted is **where** it may be fetched from. The fetch runs on the server, not
 in the visitor's browser, so an unrestricted form would let anyone aim your server at any
@@ -152,7 +155,7 @@ Responses:
 | `201` | At least one version was imported |
 | `200` | Everything was already held — `imported` is empty and `skipped` counts them |
 | `400` | Unusable reference, or the far side could not be reached |
-| `403` | No credentials, wrong credentials, or missing the permission |
+| `403` | No credentials, wrong credentials, or missing the permission, **or** the script it would import into belongs to someone else |
 
 The body carries the local script, the versions imported, how many were skipped, the
 source and upstream id, and whether it is now linked:
@@ -170,6 +173,32 @@ source and upstream id, and whether it is now linked:
 
 The 200/201 split is deliberate: a caller can tell "nothing changed" from "something was
 created" without diffing the version lists.
+
+## Who may import into an existing script
+
+An import finds the local script it belongs to, and adds versions to it. It looks first
+for the script **linked** to that source and id, and otherwise for one with the **same
+name**. The two are treated differently:
+
+| Found by | Owned? | Who may import into it |
+|---|---|---|
+| Its link to that source | Either | Anyone who may import. What lands is what the source published |
+| Its name only | No owner | Anyone who may import, as with an upload |
+| Its name only | Has an owner | **Only that owner**, signed in, or **staff or a superuser**. Anyone else is refused |
+
+The last row is the same rule the upload form and the upload API apply, described in
+`ACCOUNTS.md` under *Adding a version to someone else's script*. Without it, an import of a
+script that merely shares a name with yours would add versions to yours and then link it
+to the source, so sync kept adding to it afterwards.
+
+A refusal is shown on the import page, and is a `403` from the API. It is decided as soon
+as the source has said what the script is called, before any version or PDF is fetched, so
+it costs the other server one request.
+
+`manage.py import_script` and `sync_upstream` are not held to it: they run as whoever
+administers the instance, not as a visitor, and sync only touches scripts already linked.
+Staff and superusers are let through on the page and the API as well, so an administrator
+never needs the command line for this.
 
 ## In the admin
 
@@ -205,5 +234,5 @@ the script it already created rather than forking a second copy.
   importing while the JSON keeps working.
 - **Nothing is pushed back.** This is a one-way copy: votes, comments and edits made here
   never reach the source instance.
-- Imported scripts have **no owner** locally, so anyone with upload rights can add
-  versions to them. Set an owner in the admin if that matters to you.
+- A script created by an import has **no owner**, so anyone who can upload can add versions
+  to it. Set an owner in the admin if that matters to you, and the rule below then applies.

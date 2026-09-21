@@ -39,6 +39,8 @@ class Command(BaseCommand):
                     source=options["source"],
                     link=not options["no_link"],
                     all_versions=options["all_versions"],
+                    # Run from a shell by whoever administers the instance, not by a visitor.
+                    enforce_owner=False,
                 )
             except upstream.UpstreamError as exc:
                 failures += 1

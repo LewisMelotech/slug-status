@@ -28,6 +28,14 @@ class UpstreamError(Exception):
     """Anything that stopped us reading from the upstream instance."""
 
 
+class NotOwner(UpstreamError):
+    """The script an import would change belongs to someone other than the importer.
+
+    An UpstreamError so the import page and the commands, which already catch that and
+    show its message, report it without knowing about ownership.
+    """
+
+
 def normalise_source(source):
     """Reduce a source to a bare scheme://host[:port], so links compare equal."""
     source = str(source or "").strip()
@@ -166,22 +174,40 @@ def _counts(content):
     }
 
 
-def _target_script(source, upstream_id, name):
-    """The local Script for this upstream one: the linked one, else by name, else new."""
+def _target_script(source, upstream_id, name, user=None, enforce_owner=True):
+    """The local Script for this upstream one: the linked one, else by name, else new.
+
+    A script found by its link is the source's own, so anyone may import into it: what
+    lands is what the source published. One found only by sharing a name is a different
+    matter, because an import would add versions to it and then link it to the source.
+    If someone owns it, only that owner may, or staff: the upload form's rule, with staff
+    let through since they can change any script from the admin.
+
+    ``user`` is who is importing, and None or an anonymous user owns nothing. Callers that
+    act as the operator rather than for a visitor, the command line and sync, pass
+    ``enforce_owner=False``. Forgetting to say leaves the rule on.
+    """
     script = models.Script.objects.filter(upstream_source=source, upstream_id=upstream_id).first()
     if script:
         return script, False
     script = models.Script.objects.filter(name=name).first()
     if script:
+        if enforce_owner and not script.may_add_versions(user):
+            raise NotOwner(
+                f"'{script.name}' already exists here and belongs to another user, "
+                "so only its owner or staff can import into it."
+            )
         return script, False
     return models.Script(name=name), True
 
 
 @transaction.atomic
-def import_version(source, row, pdf=None, link=True):
+def import_version(source, row, pdf=None, link=True, user=None, enforce_owner=True):
     """Create one ScriptVersion from an upstream version row.
 
     Returns the new ScriptVersion, or None when that version is already held locally.
+    Raises NotOwner when ``user`` may not import into the script it matches; see
+    ``_target_script``.
     """
     source = normalise_source(source)
     upstream_id = row.get("script_id")
@@ -190,7 +216,7 @@ def import_version(source, row, pdf=None, link=True):
     if not (upstream_id and name and version):
         raise UpstreamError(f"Upstream version row is missing script_id, name or version: {row!r}")
 
-    script, is_new = _target_script(source, upstream_id, name)
+    script, is_new = _target_script(source, upstream_id, name, user, enforce_owner)
     if link:
         script.upstream_source = source
         script.upstream_id = upstream_id
@@ -238,11 +264,20 @@ def import_version(source, row, pdf=None, link=True):
     return script_version
 
 
-def import_script(reference, source=DEFAULT_SOURCE, link=True, all_versions=False, client=None):
+def import_script(
+    reference,
+    source=DEFAULT_SOURCE,
+    link=True,
+    all_versions=False,
+    client=None,
+    user=None,
+    enforce_owner=True,
+):
     """Import a script from upstream by id or URL.
 
     Returns (script, imported, skipped) where imported is the list of ScriptVersions
-    created and skipped counts versions already held locally.
+    created and skipped counts versions already held locally. ``user`` is who is
+    importing; see ``_target_script`` for the ownership rule and ``enforce_owner``.
     """
     source, upstream_id = parse_reference(reference, source)
     client = client or UpstreamClient(source)
@@ -250,6 +285,10 @@ def import_script(reference, source=DEFAULT_SOURCE, link=True, all_versions=Fals
     versions = detail.get("versions") or {}
     if not versions:
         raise UpstreamError(f"Script {upstream_id} on {source} has no versions to import.")
+
+    # Refused here, before anything else is fetched: every version and its PDF is a request
+    # to someone else's server, and a refusal does not need any of them.
+    _target_script(source, upstream_id, detail.get("name"), user, enforce_owner)
 
     wanted = versions.items() if all_versions else [_latest_of(versions, detail)]
 
@@ -261,7 +300,7 @@ def import_script(reference, source=DEFAULT_SOURCE, link=True, all_versions=Fals
         for version_number, url in wanted:
             row = client.version(url)
             pdf = client.pdf(upstream_id, row.get("version") or version_number)
-            created = import_version(source, row, pdf=pdf, link=link)
+            created = import_version(source, row, pdf=pdf, link=link, user=user, enforce_owner=enforce_owner)
             if created is None:
                 skipped += 1
                 logger.info("Already held %s %s from %s", detail.get("name"), version_number, source)
@@ -296,6 +335,8 @@ def sync_script(script, client=None):
         link=True,
         all_versions=True,
         client=client,
+        # Sync follows scripts already linked to their source, and runs as the system.
+        enforce_owner=False,
     )
     return imported
 

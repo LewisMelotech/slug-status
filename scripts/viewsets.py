@@ -80,7 +80,8 @@ class ScriptViewSet(viewsets.ReadOnlyModelViewSet):
         to a script page, and "source" names a different instance for a bare id.
         Pass {"all_versions": true} for the full history, or {"link": false} for a
         one-time copy that sync_upstream will not follow. Requires the
-        scripts.api_write_permission permission.
+        scripts.api_write_permission permission. When a script of the same name
+        already exists and has an owner, only that owner may import into it: 403.
         """
         serializer = serializers.ScriptImportSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -92,7 +93,12 @@ class ScriptViewSet(viewsets.ReadOnlyModelViewSet):
                 source=data["source"],
                 link=data["link"],
                 all_versions=data["all_versions"],
+                user=request.user,
             )
+        except upstream.NotOwner as exc:
+            # Authenticated, and allowed to import, but the script it would change belongs
+            # to someone else: refused, as the upload API refuses the same thing.
+            return Response({"error": str(exc)}, status=status.HTTP_403_FORBIDDEN)
         except upstream.UpstreamError as exc:
             # The far side being unreachable, missing the script, or answering with
             # something other than JSON is a bad request here, not a 500: nothing on
@@ -209,7 +215,7 @@ class VersionViewSet(viewsets.ModelViewSet):
             script.owner = user
             script.save()
         else:
-            if script.owner and script.owner != user:
+            if not script.may_add_versions(user):
                 return Response(
                     {"error": "You do not have permission to update this script."}, status=status.HTTP_403_FORBIDDEN
                 )

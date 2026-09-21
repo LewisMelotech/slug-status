@@ -137,6 +137,19 @@ class Script(models.Model):
             return None
         return f"{self.upstream_source.rstrip('/')}/script/{self.upstream_id}"
 
+    def may_add_versions(self, user):
+        """Whether ``user`` may add a version to this script, by upload or by import.
+
+        An unowned script is open to anyone. An owned one is open to its owner, and to staff
+        and superusers, who can change any script from the admin anyway. None and an
+        anonymous user are nobody. Compared by id, so the owner is never fetched.
+        """
+        if self.owner_id is None:
+            return True
+        if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False):
+            return True
+        return self.owner_id == getattr(user, "pk", None)
+
     def save(self, *args, **kwargs):
         # Canonicalise here rather than only at the form/serializer boundary so
         # that every write path stores one spelling. Uniqueness is a plain

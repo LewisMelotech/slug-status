@@ -98,7 +98,7 @@ class ScriptForm(forms.Form):
         try:
             script = models.Script.objects.get(name=script_name)
 
-            if script.owner and (script.owner != self.user):
+            if not script.may_add_versions(self.user):
                 raise ValidationError("You are not the owner of this script and cannot upload a new version")
 
             new_version = cleaned_data["version"]

@@ -75,3 +75,20 @@ you a password you both know, so the reset link is usually the better habit.
 
 Grant them under the user's **Permissions** in the Django admin. Superusers have all of
 them implicitly.
+
+## Adding a version to someone else's script
+
+A script has an owner when a signed-in user uploaded it. One rule decides who may add a
+version to it, and the upload form, the upload API and import all apply it:
+
+| The script | Who may add a version |
+|---|---|
+| Has no owner (an anonymous upload, or one created by an import) | Anyone who may upload |
+| Has an owner | The owner, **staff** and **superusers**. Everyone else is refused |
+
+Staff are let through because they can change any script from the admin anyway, so
+refusing them on the site only sends them the long way round. Signing in is not enough:
+an ordinary user is refused on someone else's script exactly as an anonymous visitor is.
+
+This covers **adding** versions. Editing or deleting an existing version is still the
+owner's alone, on the site and in the API.
