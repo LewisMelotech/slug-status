@@ -2,7 +2,7 @@
 
 from django.core.management.base import BaseCommand, CommandError
 
-from scripts import upstream
+from scripts import notifications, upstream
 
 
 class Command(BaseCommand):
@@ -34,14 +34,15 @@ class Command(BaseCommand):
         failures = 0
         for reference in options["reference"]:
             try:
-                script, imported, skipped = upstream.import_script(
-                    reference,
-                    source=options["source"],
-                    link=not options["no_link"],
-                    all_versions=options["all_versions"],
-                    # Run from a shell by whoever administers the instance, not by a visitor.
-                    enforce_owner=False,
-                )
+                with notifications.attributed("Imported", user=None, origin="the command line"):
+                    script, imported, skipped = upstream.import_script(
+                        reference,
+                        source=options["source"],
+                        link=not options["no_link"],
+                        all_versions=options["all_versions"],
+                        # Run from a shell by whoever administers the instance, not by a visitor.
+                        enforce_owner=False,
+                    )
             except upstream.UpstreamError as exc:
                 failures += 1
                 self.stderr.write(self.style.ERROR(f"{reference}: {exc}"))

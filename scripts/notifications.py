@@ -103,6 +103,28 @@ WENT_ONLINE = Webhook("online", "DISCORD_ONLINE_WEBHOOK_URL", "DISCORD_ONLINE_WE
 
 
 @dataclass(frozen=True)
+class Credit:
+    """Who is responsible for a version arriving, for staff reading the channel.
+
+    Never for anyone in the channel to act on: it is used only in a footer, which Discord
+    renders as plain, unlinked text, so a hostile username cannot ping anyone through it —
+    see allowed_mentions. ``by`` is the site username, the same one shown on the staff-only
+    Server page, never a first or display name someone else could share.
+    """
+
+    verb: str
+    by: str | None = None
+    origin: str | None = None
+
+    def text(self) -> str:
+        if self.by:
+            return f"{self.verb} by {self.by}"
+        if self.origin:
+            return f"{self.verb} from {self.origin}"
+        return f"{self.verb} anonymously"
+
+
+@dataclass(frozen=True)
 class Announcement:
     """One newly created version."""
 
@@ -112,6 +134,7 @@ class Announcement:
     author: str | None
     new_script: bool
     path: str
+    credit: Credit | None = None
 
     @property
     def wording(self) -> str:
@@ -170,6 +193,89 @@ def _script_path(script) -> str:
     return reverse("script", args=[script.pk])
 
 
+# --- Who is responsible: for staff reading the channel, never for the channel to ping ---
+
+_local = threading.local()
+
+# Distinguishes "no user named" (read the ambient request) from "named as nobody"
+# (attributed(..., user=None), for a route acting as the system rather than a visitor).
+_AMBIENT = object()
+
+
+def remember_request(request) -> None:
+    """Called once per request, by RememberRequest, so a credit can read who it is.
+
+    The request object itself is kept, not a snapshot of its user: DRF authenticates
+    inside the view and writes the result back onto this same request, after the
+    middleware has already called this, so a Basic-auth upload starts the request
+    anonymous and is somebody by the time a version is actually created.
+    """
+    _local.request = request
+
+
+def forget_request() -> None:
+    _local.request = None
+    _local.stack = []
+
+
+@contextmanager
+def attributed(verb: str, *, user=_AMBIENT, origin: str | None = None):
+    """Say what kind of route is creating a version, for the arrivals credit.
+
+    ``user`` left unset reads the ambient request — the ordinary case, a person uploading
+    or importing through the site or the API. Passed explicitly, even as None, it
+    overrides that: a route acting as the operator (sync) must not credit whoever happened
+    to trigger it, such as the admin action that runs it by hand.
+
+    Nested calls stack, and each restores the one before it, on the way out however it
+    was left — an exception included.
+    """
+    stack = getattr(_local, "stack", None)
+    if stack is None:
+        stack = _local.stack = []
+    stack.append((verb, user, origin))
+    try:
+        yield
+    finally:
+        stack.pop()
+
+
+def _username_of(user) -> str | None:
+    if user is None or not getattr(user, "is_authenticated", False):
+        return None
+    return user.get_username() or None
+
+
+def _request_username() -> str | None:
+    request = getattr(_local, "request", None)
+    return _username_of(getattr(request, "user", None)) if request is not None else None
+
+
+def current_credit() -> Credit | None:
+    """The credit a version created right now would carry, or None to add no line.
+
+    None both when the setting is off and when nothing here says a version is even being
+    created through a request or a named route — the shell, a migration, a test. Inside
+    either of those, an unsigned-in visitor still gets a line: "Uploaded anonymously" is a
+    fact worth knowing, unlike no line at all.
+
+    With no attributed() in force the verb defaults to "Uploaded", which is every route
+    that does not wrap itself: the web form and the API both create a version straight
+    from the request, with nothing else to name.
+    """
+    if not getattr(settings, "DISCORD_ARRIVALS_SHOW_UPLOADER", True):
+        return None
+    stack = getattr(_local, "stack", None)
+    if stack:
+        verb, user, origin = stack[-1]
+        by = _request_username() if user is _AMBIENT else _username_of(user)
+        return Credit(verb, by=by, origin=origin)
+    request = getattr(_local, "request", None)
+    if request is None:
+        return None
+    return Credit("Uploaded", by=_username_of(getattr(request, "user", None)))
+
+
 def describe(script_version) -> Announcement:
     """Snapshot one new version as an Announcement.
 
@@ -186,6 +292,7 @@ def describe(script_version) -> Announcement:
         author=script_version.author or None,
         new_script=held <= 1,
         path=_script_path(script),
+        credit=current_credit(),
     )
 
 
@@ -296,6 +403,54 @@ def _budgeted(lines: list[str]) -> str:
     return "\n".join(kept)
 
 
+# Discord's own caps: a footer field, and the sum of every text field in one embed. The
+# credit summary is budgeted against both, so a long batch cannot push either over.
+FOOTER_LIMIT = 2048
+EMBED_TOTAL_LIMIT = 6000
+
+
+def _credit_texts(items) -> list[str]:
+    """Each distinct credit among ``items``, once, in the order it was first seen."""
+    seen: set[Credit] = set()
+    texts = []
+    for item in items:
+        credit = getattr(item, "credit", None)
+        if credit is None or credit in seen:
+            continue
+        seen.add(credit)
+        texts.append(credit.text())
+    return texts
+
+
+def _join_within(texts: list[str], limit: int) -> str:
+    """Comma-join texts up to ``limit`` characters, marking "…" if any had to be left out."""
+    if not texts or limit <= 0:
+        return ""
+    joined = texts[0]
+    if len(joined) > limit:
+        return (joined[: limit - 1] + "…") if limit > 1 else "…"
+    for text in texts[1:]:
+        candidate = f"{joined}, {text}"
+        if len(candidate) > limit:
+            return joined + "…"
+        joined = candidate
+    return joined
+
+
+def _add_credit_footer(embed: dict, items: list) -> None:
+    """Put who is responsible ahead of whatever the footer already says, if anyone is."""
+    texts = _credit_texts(items)
+    if not texts:
+        return
+    existing = embed.get("footer", {}).get("text")
+    joiner = " · " if existing else ""
+    reserved = len(joiner) + len(existing or "")
+    budget = min(FOOTER_LIMIT, EMBED_TOTAL_LIMIT - len(embed["title"]) - len(embed["description"])) - reserved
+    summary = _join_within(texts, budget)
+    if summary:
+        embed["footer"] = {"text": f"{summary}{joiner}{existing}" if existing else summary}
+
+
 def _single_embed(announcement: Announcement) -> dict:
     embed = {
         "title": f"{announcement.wording}: {announcement.name}"[:256],
@@ -306,17 +461,20 @@ def _single_embed(announcement: Announcement) -> dict:
     link = _link(announcement)
     if link:
         embed["url"] = link
+    _add_credit_footer(embed, [announcement])
     return embed
 
 
 def _batch_embed(announcements: list[Announcement]) -> dict:
     lines = [f"- {_label(item)} v{escape(item.version)}{_by(item)} — {item.wording.lower()}" for item in announcements]
-    return {
+    embed = {
         "title": f"{len(announcements)} new script versions",
         "description": _budgeted(lines),
         "color": COLOUR_NEW_VERSION,
         "footer": {"text": "None of them are on the Minecraft server yet"},
     }
+    _add_credit_footer(embed, announcements)
+    return embed
 
 
 def _change(deployment: Deployment) -> str:

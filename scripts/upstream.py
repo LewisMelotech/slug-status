@@ -329,15 +329,16 @@ def sync_script(script, client=None):
     """
     if not (script.upstream_source and script.upstream_id):
         raise UpstreamError(f"{script} is not linked to an upstream instance.")
-    _, imported, _ = import_script(
-        script.upstream_id,
-        source=script.upstream_source,
-        link=True,
-        all_versions=True,
-        client=client,
-        # Sync follows scripts already linked to their source, and runs as the system.
-        enforce_owner=False,
-    )
+    with notifications.attributed("Synced", user=None, origin=script.upstream_source):
+        _, imported, _ = import_script(
+            script.upstream_id,
+            source=script.upstream_source,
+            link=True,
+            all_versions=True,
+            client=client,
+            # Sync follows scripts already linked to their source, and runs as the system.
+            enforce_owner=False,
+        )
     return imported
 
 

@@ -12,7 +12,7 @@ from rest_framework.response import Response
 from versionfield import Version
 
 from scripts import filters as filtersets
-from scripts import models, script_json, serializers, slugs, upstream
+from scripts import models, notifications, script_json, serializers, slugs, upstream
 from scripts.views import (
     calculate_edition,
     count_character,
@@ -88,13 +88,14 @@ class ScriptViewSet(viewsets.ReadOnlyModelViewSet):
         data = serializer.validated_data
 
         try:
-            script, imported, skipped = upstream.import_script(
-                data["upstream_id"],
-                source=data["source"],
-                link=data["link"],
-                all_versions=data["all_versions"],
-                user=request.user,
-            )
+            with notifications.attributed("Imported"):
+                script, imported, skipped = upstream.import_script(
+                    data["upstream_id"],
+                    source=data["source"],
+                    link=data["link"],
+                    all_versions=data["all_versions"],
+                    user=request.user,
+                )
         except upstream.NotOwner as exc:
             # Authenticated, and allowed to import, but the script it would change belongs
             # to someone else: refused, as the upload API refuses the same thing.

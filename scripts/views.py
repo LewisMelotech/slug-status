@@ -1492,13 +1492,14 @@ class ScriptImportView(generic.FormView):
 
     def form_valid(self, form):
         try:
-            script, imported, skipped = upstream.import_script(
-                form.cleaned_data["upstream_id"],
-                source=form.cleaned_data["source"],
-                link=form.cleaned_data.get("link", False),
-                all_versions=form.cleaned_data.get("all_versions", False),
-                user=self.request.user,
-            )
+            with notifications.attributed("Imported"):
+                script, imported, skipped = upstream.import_script(
+                    form.cleaned_data["upstream_id"],
+                    source=form.cleaned_data["source"],
+                    link=form.cleaned_data.get("link", False),
+                    all_versions=form.cleaned_data.get("all_versions", False),
+                    user=self.request.user,
+                )
         except upstream.UpstreamError as exc:
             form.add_error("reference", str(exc))
             return self.form_invalid(form)

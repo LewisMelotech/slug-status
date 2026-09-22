@@ -53,6 +53,10 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # After authentication: a Discord arrivals credit reads request.user, and DRF sets
+    # that during the view, but this still has to run before the view to be there to
+    # forget afterwards. See scripts/middleware.py.
+    "scripts.middleware.RememberRequest",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "allauth.account.middleware.AccountMiddleware",
@@ -220,6 +224,14 @@ IMPORT_SOURCES = [
 # incoming webhook. Blank switches arrivals off, which is the default. Treat the URL as a
 # secret — anyone holding it can post to that channel.
 DISCORD_ARRIVALS_WEBHOOK_URL = os.getenv("DISCORD_ARRIVALS_WEBHOOK_URL", "").strip()
+
+# Names who uploaded or imported a script in the arrivals announcement, by their site
+# username, so staff reading the channel know who to ask. Never a display name, and never
+# used to ping: the credit lives only in the embed's footer, which Discord renders as
+# plain text. It shows whether or not they own the script — "upload without owning" is
+# about ownership, not about staying unnamed — and "anonymously" for a visitor with no
+# account. Off entirely with False.
+DISCORD_ARRIVALS_SHOW_UPLOADER = os.getenv("DISCORD_ARRIVALS_SHOW_UPLOADER", "True") == "True"
 
 # Prepended to each announcement so the right people see it, e.g. "<@&123456789012345678>"
 # for a role, or "@here". Only the id named here is ever allowed to ping; a mention that

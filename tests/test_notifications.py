@@ -2,12 +2,12 @@ import pytest
 import requests
 
 from scripts import notifications
-from scripts.notifications import Announcement
+from scripts.notifications import Announcement, Credit
 
 WEBHOOK = "https://discord.com/api/webhooks/1/abcdef"
 
 
-def make(name="Trouble Brewing", version="1.0.0", author="TPI", new_script=False, pk=1, path=None):
+def make(name="Trouble Brewing", version="1.0.0", author="TPI", new_script=False, pk=1, path=None, credit=None):
     return Announcement(
         script_pk=pk,
         name=name,
@@ -15,6 +15,7 @@ def make(name="Trouble Brewing", version="1.0.0", author="TPI", new_script=False
         author=author,
         new_script=new_script,
         path=path or f"/script/{pk}",
+        credit=credit,
     )
 
 
@@ -855,3 +856,247 @@ def test_one_refused_webhook_fails_the_command_but_the_other_still_sends(both, s
     with pytest.raises(CommandError, match="The online webhook did not accept it"):
         run_command()
     assert [name for name, _ in samples["calls"]] == ["arrivals", "online"]
+
+
+# --- Who made it arrive: for staff reading the channel ---------------------------------------
+
+
+class Person:
+    """A user as far as the credit can tell: a username, and whether they are signed in."""
+
+    def __init__(self, username="alice", signed_in=True, first_name="Alice"):
+        self._username, self.is_authenticated, self.first_name = username, signed_in, first_name
+
+    def get_username(self):
+        return self._username
+
+
+class Request:
+    def __init__(self, user):
+        self.user = user
+
+
+@pytest.fixture(autouse=True)
+def no_leftover_request():
+    """The credit reads thread-local state, so no test may leave a request behind."""
+    notifications.forget_request()
+    yield
+    notifications.forget_request()
+
+
+def test_the_credit_reads_by_for_a_person_and_anonymously_for_nobody():
+    assert Credit("Uploaded", by="alice").text() == "Uploaded by alice"
+    assert Credit("Imported", by="alice").text() == "Imported by alice"
+    assert Credit("Uploaded").text() == "Uploaded anonymously"
+    assert Credit("Synced", origin="botcscripts.com").text() == "Synced from botcscripts.com"
+    assert Credit("Imported", origin="the command line").text() == "Imported from the command line"
+
+
+def test_a_single_announcement_puts_the_credit_in_the_footer_ahead_of_the_note():
+    payload = notifications.build_payload([make(credit=Credit("Uploaded", by="alice"))])
+
+    assert payload["embeds"][0]["footer"] == {"text": "Uploaded by alice · Not on the Minecraft server yet"}
+
+
+def test_without_a_credit_the_footer_is_exactly_what_it_was():
+    payload = notifications.build_payload([make()])
+
+    assert payload["embeds"][0]["footer"] == {"text": "Not on the Minecraft server yet"}
+
+
+def test_an_anonymous_upload_is_credited_as_anonymous_and_not_left_blank():
+    payload = notifications.build_payload([make(credit=Credit("Uploaded"))])
+
+    assert payload["embeds"][0]["footer"]["text"].startswith("Uploaded anonymously")
+
+
+def test_the_credit_is_only_ever_in_the_footer_so_a_hostile_username_cannot_ping():
+    """A footer is plain text in Discord, which renders no mention there, and allowed_mentions
+    is empty besides. The name goes nowhere else, and it is not escaped: escaping would show
+    the backslashes."""
+    nasty = "@everyone <@123456789> <@&987654321> **bold**"
+    payload = notifications.build_payload([make(credit=Credit("Uploaded", by=nasty))])
+    embed = payload["embeds"][0]
+
+    assert nasty in embed["footer"]["text"]
+    assert nasty not in embed["title"] + embed["description"] + payload.get("content", "")
+    assert payload["allowed_mentions"] == {"parse": []}
+
+
+def test_a_batch_names_each_distinct_credit_once_in_the_footer():
+    announcements = [
+        make(pk=1, credit=Credit("Uploaded", by="alice")),
+        make(pk=2, credit=Credit("Uploaded", by="alice")),
+        make(pk=3, credit=Credit("Imported", by="bob")),
+        make(pk=4, credit=Credit("Uploaded")),
+    ]
+
+    footer = notifications.build_payload(announcements)["embeds"][0]["footer"]["text"]
+
+    assert footer == (
+        "Uploaded by alice, Imported by bob, Uploaded anonymously · None of them are on the Minecraft server yet"
+    )
+
+
+def test_a_batch_with_no_credits_keeps_its_footer():
+    footer = notifications.build_payload([make(pk=1), make(pk=2)])["embeds"][0]["footer"]["text"]
+
+    assert footer == "None of them are on the Minecraft server yet"
+
+
+def test_many_credits_are_cut_short_so_the_message_stays_inside_discords_limits():
+    announcements = [
+        make(pk=i, name="N" * 100, credit=Credit("Uploaded", by=f"user-{i}-" + "x" * 100)) for i in range(60)
+    ]
+
+    embed = notifications.build_payload(announcements)["embeds"][0]
+
+    assert len(embed["footer"]["text"]) <= 2048
+    assert embed["footer"]["text"].startswith("Uploaded by user-0-")
+    assert "…" in embed["footer"]["text"]
+    assert len(embed["description"]) + len(embed["title"]) + len(embed["footer"]["text"]) <= 6000
+
+
+def test_collapsing_a_history_keeps_the_credit_of_the_version_it_keeps():
+    older = make(version="1.0.0", credit=Credit("Imported", by="alice"))
+    newer = make(version="1.1.0", credit=Credit("Imported", by="alice"))
+
+    (kept,) = notifications.collapse([older, newer])
+
+    assert kept.version == "1.1.0"
+    assert kept.credit == Credit("Imported", by="alice")
+
+
+# --- Where the credit comes from ---------------------------------------------------------------
+
+
+def test_nothing_is_credited_outside_a_request_or_a_named_route():
+    # The shell, a test, anything with no request and nothing declared: no line, as before.
+    assert notifications.current_credit() is None
+
+
+def test_a_signed_in_person_in_a_request_is_credited_by_username_and_not_first_name():
+    notifications.remember_request(Request(Person(username="alice99", first_name="Alice")))
+
+    assert notifications.current_credit() == Credit("Uploaded", by="alice99")
+
+
+def test_an_anonymous_visitor_in_a_request_is_credited_as_anonymous():
+    notifications.remember_request(Request(Person(signed_in=False)))
+
+    assert notifications.current_credit() == Credit("Uploaded")
+
+
+def test_being_signed_in_is_enough_whether_or_not_they_own_the_script():
+    """ "Upload without owning the script" is about ownership, not privacy: staff still want
+    to know who uploaded. Nothing about ownership reaches the credit at all."""
+    notifications.remember_request(Request(Person(username="alice")))
+
+    assert notifications.current_credit().by == "alice"
+
+
+def test_the_user_is_read_when_the_credit_is_taken_not_when_the_request_began():
+    """DRF authenticates inside the view and writes the user back to the request then, so a
+    Basic-auth upload starts anonymous and is somebody by the time the version is saved."""
+    request = Request(Person(signed_in=False))
+    notifications.remember_request(request)
+    request.user = Person(username="discordbot")
+
+    assert notifications.current_credit() == Credit("Uploaded", by="discordbot")
+
+
+def test_a_named_route_changes_the_verb_but_keeps_the_person():
+    notifications.remember_request(Request(Person(username="alice")))
+
+    with notifications.attributed("Imported"):
+        assert notifications.current_credit() == Credit("Imported", by="alice")
+    assert notifications.current_credit() == Credit("Uploaded", by="alice")
+
+
+def test_a_route_with_nobody_behind_it_says_where_it_came_from_instead():
+    with notifications.attributed("Synced", user=None, origin="botcscripts.com"):
+        assert notifications.current_credit() == Credit("Synced", origin="botcscripts.com")
+
+
+def test_an_operator_action_does_not_borrow_the_person_who_happened_to_trigger_it():
+    # The admin's "sync now" runs sync for a signed-in staff member, but the versions came
+    # from the source, not from them.
+    notifications.remember_request(Request(Person(username="staffer")))
+
+    with notifications.attributed("Synced", user=None, origin="botcscripts.com"):
+        assert notifications.current_credit().by is None
+
+
+def test_named_routes_nest_and_restore():
+    with notifications.attributed("Imported", user=None, origin="the command line"):
+        with notifications.attributed("Synced", user=None, origin="botcscripts.com"):
+            assert notifications.current_credit().verb == "Synced"
+        assert notifications.current_credit().verb == "Imported"
+    assert notifications.current_credit() is None
+
+
+def test_a_named_route_restores_the_previous_state_even_when_it_raises():
+    with pytest.raises(RuntimeError), notifications.attributed("Imported", user=None):
+        raise RuntimeError("boom")
+
+    assert notifications.current_credit() is None
+
+
+def test_the_credit_can_be_switched_off(settings):
+    settings.DISCORD_ARRIVALS_SHOW_UPLOADER = False
+    notifications.remember_request(Request(Person(username="alice")))
+
+    assert notifications.current_credit() is None
+    with notifications.attributed("Imported"):
+        assert notifications.current_credit() is None
+
+
+def test_the_middleware_remembers_the_request_for_its_duration_only():
+    from scripts.middleware import RememberRequest
+
+    request = Request(Person(username="alice"))
+    seen = []
+
+    def view(req):
+        seen.append(notifications.current_credit())
+        return "response"
+
+    assert RememberRequest(view)(request) == "response"
+
+    assert seen == [Credit("Uploaded", by="alice")]
+    assert notifications.current_credit() is None
+
+
+def test_the_middleware_forgets_the_request_even_when_the_view_raises():
+    from scripts.middleware import RememberRequest
+
+    def view(req):
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        RememberRequest(view)(Request(Person()))
+
+    assert notifications.current_credit() is None
+
+
+def test_describe_takes_the_credit_when_the_version_is_created(monkeypatch):
+    from scripts import models
+
+    monkeypatch.setattr(notifications.models.ScriptVersion, "plain_objects", _CountingManager(1))
+    version = models.ScriptVersion(script=models.Script(pk=3, name="Trouble Brewing"), version="1.0.0")
+    notifications.remember_request(Request(Person(username="alice")))
+
+    announcement = notifications.describe(version)
+    notifications.forget_request()
+
+    # Snapshot at creation, like everything else about it: sending happens later.
+    assert announcement.credit == Credit("Uploaded", by="alice")
+
+
+def test_middleware_is_installed_after_authentication_so_there_is_a_user_to_read():
+    from django.conf import settings
+
+    stack = settings.MIDDLEWARE
+    assert stack.index("scripts.middleware.RememberRequest") > stack.index(
+        "django.contrib.auth.middleware.AuthenticationMiddleware"
+    )
