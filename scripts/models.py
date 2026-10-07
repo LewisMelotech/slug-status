@@ -152,6 +152,19 @@ class Script(models.Model):
             return True
         return self.owner_id == getattr(user, "pk", None)
 
+    def may_upload_pdfs(self, user):
+        """Whether ``user`` may give one of this script's versions a PDF, or replace it.
+
+        Narrower than ``may_add_versions``: its owner, and staff or superusers. A script
+        with no owner, as every imported one has, is staff's alone, since a PDF is shown as
+        the script's own and anyone at all could otherwise attach one.
+        """
+        if not getattr(user, "is_authenticated", False):
+            return False
+        if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False):
+            return True
+        return self.owner_id is not None and self.owner_id == user.pk
+
     def save(self, *args, **kwargs):
         # Canonicalise here rather than only at the form/serializer boundary so
         # that every write path stores one spelling. Uniqueness is a plain

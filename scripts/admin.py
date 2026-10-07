@@ -5,6 +5,7 @@ from django.contrib import admin, messages
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from django.contrib.auth.models import User
 from django.contrib.auth.tokens import default_token_generator
+from django.db.models import Q
 from django.urls import reverse
 from django.utils.encoding import force_bytes
 from django.utils.html import format_html
@@ -129,14 +130,37 @@ def mark_off_server(modeladmin, request, queryset):
     modeladmin.message_user(request, f"{updated} version(s) marked offline.", level=messages.SUCCESS)
 
 
+class HasPdfFilter(admin.SimpleListFilter):
+    """Versions with or without a PDF: imported and synced ones arrive without."""
+
+    title = "PDF"
+    parameter_name = "has_pdf"
+
+    def lookups(self, request, model_admin):
+        return [("yes", "Has a PDF"), ("no", "No PDF")]
+
+    def queryset(self, request, queryset):
+        # An empty FileField is stored as "" rather than NULL, but both mean no file.
+        missing = Q(pdf="") | Q(pdf__isnull=True)
+        if self.value() == "yes":
+            return queryset.exclude(missing)
+        if self.value() == "no":
+            return queryset.filter(missing)
+        return queryset
+
+
 class ScriptVersionAdmin(admin.ModelAdmin):
     readonly_fields = ["created"]
-    list_display = ["pk", "script", "version", "status", "latest", "author", "created"]
+    list_display = ["pk", "script", "version", "status", "latest", "has_pdf", "author", "created"]
     list_display_links = ["pk", "script"]
     list_editable = ["status"]
-    list_filter = ["status", "latest", "script_type"]
+    list_filter = ["status", "latest", HasPdfFilter, "script_type"]
     search_fields = ["script__name", "author"]
     actions = [mark_on_server, mark_off_server]
+
+    @admin.display(boolean=True, description="PDF")
+    def has_pdf(self, obj):
+        return bool(obj.pdf)
 
     def save_model(self, request, obj, form, change):
         # Covers the change form and the inline status column on the list, so an

@@ -189,6 +189,21 @@
             <a class="btn btn-primary" href="{% url 'download_pdf' script.pk script_version.version %}">Download PDF</a>
         </div>
     {% endif %}
+    {% if can_upload_pdf %}
+        <div class="col-md-auto p-1">
+            <form method="post" action="{% url 'upload_version_pdf' script.pk script_version.version %}"
+                  enctype="multipart/form-data" class="form-inline m-0"
+                  title="Attach a PDF to version {{ script_version.version }} without making a new version">
+                {% csrf_token %}
+                <input type="file" name="pdf" accept="application/pdf,.pdf" required
+                       class="form-control-file form-control-sm mr-1" style="width: 14rem">
+                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                <button type="submit" class="btn btn-outline-primary"{% if UPLOAD_DISABLED and not user.is_staff %} disabled{% endif %}>
+                    {% if script_version.pdf %}Replace PDF{% else %}Upload PDF{% endif %}
+                </button>
+            </form>
+        </div>
+    {% endif %}
     {% include "minecraft_commands.html" %}
     {% if not script.owner or user == script_version.script.owner %}
         <div class="col-md-auto p-1">

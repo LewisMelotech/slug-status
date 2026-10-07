@@ -293,6 +293,7 @@ class ScriptView(generic.DetailView):
         )
 
         context["can_delete"] = self.request.user == current_script.script.owner
+        context["can_upload_pdf"] = current_script.script.may_upload_pdfs(self.request.user)
         context["script_tool_link"] = (
             f"https://script.bloodontheclocktower.com?script={script_json.compress_json(current_script.content)}"
         )
@@ -1645,4 +1646,41 @@ def set_script_slug(request, pk: int):
             messages.error(request, str(error))
 
     fallback = reverse("script", kwargs={"pk": script.pk})
+    return redirect(get_safe_redirect_url(request.POST.get("next"), request.get_host(), request.is_secure(), fallback))
+
+
+def upload_version_pdf(request, pk: int, version: str):
+    """Give an existing version a PDF, or replace the one it has, without a new version.
+
+    For the script's owner and staff only; see Script.may_upload_pdfs. Imports and sync
+    bring no PDFs, which botcscripts.com does not permit, so this is how a version they
+    added gets one. POST only, held to the upload switch as uploading is, and the file
+    is checked as the upload form checks one.
+    """
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+
+    try:
+        script_version = get_object_or_404(
+            models.ScriptVersion.plain_objects.select_related("script"), script__pk=pk, version=version
+        )
+    except (ValueError, NotImplementedError) as exc:
+        raise Http404("No such version.") from exc
+    if not script_version.script.may_upload_pdfs(request.user):
+        raise PermissionDenied("Only the script's owner or staff can upload a PDF for it.")
+    if settings.UPLOAD_DISABLED and not request.user.is_staff:
+        raise PermissionDenied("Uploads are currently disabled.")
+
+    form = forms.VersionPdfForm(request.POST, request.FILES)
+    if form.is_valid():
+        replacing = bool(script_version.pdf)
+        script_version.pdf = form.cleaned_data["pdf"]
+        script_version.save(update_fields=["pdf"])
+        verb = "replaced" if replacing else "added"
+        messages.success(request, f"PDF {verb} for {script_version.script.name} v{script_version.version}.")
+    else:
+        for error in form.errors.get("pdf", ["That file could not be used as the PDF."]):
+            messages.error(request, str(error))
+
+    fallback = reverse("script", kwargs={"pk": pk, "version": script_version.version})
     return redirect(get_safe_redirect_url(request.POST.get("next"), request.get_host(), request.is_secure(), fallback))

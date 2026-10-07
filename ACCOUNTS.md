@@ -92,3 +92,20 @@ an ordinary user is refused on someone else's script exactly as an anonymous vis
 
 This covers **adding** versions. Editing or deleting an existing version is still the
 owner's alone, on the site and in the API.
+
+## Giving a version a PDF
+
+A version's script page has an **Upload PDF** button, **Replace PDF** once it has one, that
+attaches a PDF to that version without making a new one. Imported and synced versions arrive
+without a PDF, since botcscripts.com does not permit them to be downloaded, so this is how
+they get one. It is narrower than adding a version:
+
+| The script | Who may upload a PDF for its versions |
+|---|---|
+| Has an owner | The owner, **staff** and **superusers** |
+| Has no owner (an anonymous upload, or one created by an import) | **Staff** and **superusers** only |
+
+An unowned script is not open to everyone here, as it is for adding versions, because a PDF
+is shown as the script's own. The file is checked as the upload form checks one: a `.pdf`
+that starts like a PDF, within the size limit. `UPLOAD_DISABLED` holds owners to it as it
+does uploads, and lets staff through.

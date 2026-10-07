@@ -251,6 +251,19 @@ class UpdateDatabaseForm(forms.Form):
             )
 
 
+class VersionPdfForm(forms.Form):
+    """A PDF for a version that already exists, checked as the upload form checks one."""
+
+    pdf = forms.FileField(
+        label="PDF",
+        validators=[
+            FileExtensionValidator(["pdf"]),
+            upload_validators.validate_pdf_upload_size,
+            upload_validators.validate_pdf_signature,
+        ],
+    )
+
+
 class ScriptImportForm(forms.Form):
     reference = forms.CharField(
         label="Script id or link",

@@ -3,6 +3,8 @@ from django.http import HttpResponse
 from scripts import constants, notifications
 
 UPLOAD_PATH_PREFIXES = ("/script/upload", "/api/scripts/")
+# A PDF for an existing version, /script/<pk>/<version>/pdf, which no prefix covers.
+UPLOAD_PATH_SUFFIXES = ("/pdf",)
 BODY_METHODS = ("POST", "PUT", "PATCH")
 
 
@@ -18,7 +20,9 @@ class UploadSizeLimitMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
-        if request.method in BODY_METHODS and request.path.startswith(UPLOAD_PATH_PREFIXES):
+        if request.method in BODY_METHODS and (
+            request.path.startswith(UPLOAD_PATH_PREFIXES) or request.path.endswith(UPLOAD_PATH_SUFFIXES)
+        ):
             try:
                 content_length = int(request.headers.get("Content-Length", ""))
             except ValueError:

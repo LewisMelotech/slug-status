@@ -124,6 +124,7 @@ urlpatterns = [
         views.download_pdf,
         name="download_pdf",
     ),
+    path("script/<int:pk>/<str:version>/pdf", views.upload_version_pdf, name="upload_version_pdf"),
     path("script/search", views.AdvancedSearchView.as_view(), name="advanced_search"),
     path("script/search/results", views.AdvancedSearchResultsView.as_view()),
     path("script/upload", views.ScriptUploadView.as_view(), name="upload"),

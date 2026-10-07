@@ -23,9 +23,10 @@ Both forms are equivalent. A link has to be to botcscripts.com, with or without 
 
 What comes across: the script name, author, version, script type and the JSON content.
 **PDFs do not**: botcscripts.com does not permit programmatic access to them, so an imported
-or synced version arrives without one. Upload one on the version in the admin if it needs
-it; until then the Discord bot's `/script` has no pages to show for it, and `/json` still
-works. Character counts, edition and homebrew status are
+or synced version arrives without one. Staff, or the script's owner if it has one, can add
+it from the version's script page with **Upload PDF**, which does not make a new version;
+see `ACCOUNTS.md`. Until then the Discord bot's `/script` has no pages to show for it, and
+`/json` still works. In the admin, the version list's **PDF** filter finds versions without. Character counts, edition and homebrew status are
 recalculated locally by the same code the upload form uses, so an imported script is
 stored like an uploaded one, and adding to an existing script follows the same
 [ownership rule](#who-may-import-into-an-existing-script).
