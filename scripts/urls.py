@@ -97,6 +97,7 @@ urlpatterns = [
     # Ahead of script/<int:pk>/<str:version>, which would otherwise capture this with
     # version="slug" and never reach the view.
     path("script/<int:pk>/slug", views.set_script_slug, name="set_script_slug"),
+    path("script/<int:pk>/minecraft", views.set_minecraft_customisations, name="set_minecraft_customisations"),
     path(
         "script/<int:pk>/<str:version>/similar",
         views.get_similar_scripts,

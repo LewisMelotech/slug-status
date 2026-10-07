@@ -16,6 +16,20 @@ def tagOptions():
     return models.ScriptTag.objects.filter(public=True)
 
 
+def minecraft_customisations_field():
+    """The Minecraft Customisations box, the same wherever a script is uploaded or imported.
+
+    Its "e.g. script colour" hint is shown as a tooltip by minecraft_customisations.html
+    rather than as help text under the box.
+    """
+    return forms.CharField(
+        label="Minecraft Customisations",
+        required=False,
+        max_length=constants.MAX_MINECRAFT_CUSTOMISATIONS_LENGTH,
+        widget=forms.Textarea(attrs={"rows": 2, "placeholder": "e.g. script colour", "class": "form-control"}),
+    )
+
+
 class ScriptForm(forms.Form):
     name = forms.CharField(
         # Temporarily disable this constant until database migrations have occured
@@ -44,6 +58,7 @@ class ScriptForm(forms.Form):
         required=False,
         widget=forms.Textarea(attrs={"rows": 17, "placeholder": "Notes (enter using Markdown formatting)"}),
     )
+    minecraft_customisations = minecraft_customisations_field()
     anonymous = forms.BooleanField(required=False, initial=False, label="Upload without owning the script")
     tags = forms.ModelMultipleChoiceField(
         queryset=tagOptions(),
@@ -264,6 +279,12 @@ class VersionPdfForm(forms.Form):
     )
 
 
+class MinecraftCustomisationsForm(forms.Form):
+    """A script's Minecraft customisations, changed on their own from its script page."""
+
+    minecraft_customisations = minecraft_customisations_field()
+
+
 class ScriptImportForm(forms.Form):
     reference = forms.CharField(
         label="Script id or link",
@@ -276,6 +297,7 @@ class ScriptImportForm(forms.Form):
         initial=True,
         help_text="Pull new versions from botcscripts.com whenever sync_upstream runs.",
     )
+    minecraft_customisations = minecraft_customisations_field()
 
     def clean(self):
         cleaned = super().clean()

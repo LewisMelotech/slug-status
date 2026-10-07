@@ -196,7 +196,7 @@
             <a class="btn btn-primary" href="{% url 'download_pdf' script.pk script_version.version %}">Download PDF</a>
         </div>
     {% endif %}
-    {% if can_upload_pdf %}
+    {% if can_manage %}
         <div class="col-md-auto p-1">
             <form method="post" action="{% url 'upload_version_pdf' script.pk script_version.version %}"
                   enctype="multipart/form-data" class="form-inline m-0"
@@ -240,6 +240,17 @@
     {% endif %}
     <div class="p-1 alert-messages text-center"></div>
 </div>
+{% if can_manage %}
+<form method="post" action="{% url 'set_minecraft_customisations' pk=script.pk %}" class="form-inline mb-2">
+    {% csrf_token %}
+    <label for="{{ customisations_form.minecraft_customisations.id_for_label }}" class="mr-2">
+        Minecraft Customisations&nbsp;{% include "help_tooltip.html" with text="e.g. script colour" %}
+    </label>
+    {{ customisations_form.minecraft_customisations }}
+    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+    <button type="submit" class="btn btn-sm btn-outline-primary ml-2">Save</button>
+</form>
+{% endif %}
 <div class="row">
     <div class="col-md-auto pl-3 pr-0 pt-0 pb-0">
         Base 3: 

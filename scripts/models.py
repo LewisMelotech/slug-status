@@ -128,6 +128,11 @@ class Script(models.Model):
         help_text="Pull new versions from upstream whenever sync_upstream runs.",
     )
     last_synced = models.DateTimeField(null=True, blank=True)
+    minecraft_customisations = models.TextField(
+        blank=True,
+        default="",
+        help_text="How the script is set up on the Minecraft server, e.g. its colour.",
+    )
 
     def __str__(self):
         return f"{self.pk}. {self.name}"
@@ -152,12 +157,13 @@ class Script(models.Model):
             return True
         return self.owner_id == getattr(user, "pk", None)
 
-    def may_upload_pdfs(self, user):
-        """Whether ``user`` may give one of this script's versions a PDF, or replace it.
+    def may_manage(self, user):
+        """Whether ``user`` may look after this script: its versions' PDFs, and its
+        Minecraft customisations.
 
         Narrower than ``may_add_versions``: its owner, and staff or superusers. A script
-        with no owner, as every imported one has, is staff's alone, since a PDF is shown as
-        the script's own and anyone at all could otherwise attach one.
+        with no owner, as every imported one has, is staff's alone, since both are shown as
+        the script's own and anyone at all could otherwise change them.
         """
         if not getattr(user, "is_authenticated", False):
             return False

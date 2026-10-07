@@ -34,7 +34,8 @@ Grant it in the Django admin → Users → the user → Permissions →
 
 - **The Server page**, at `/server`, linked from the nav for those who hold the
   permission, with a badge showing how many scripts are waiting. JSON and PDF links on
-  every row so you can grab the files you are about to deploy, and one button per row.
+  every row so you can grab the files you are about to deploy, each script's **Minecraft
+  Customisations** (such as its colour, set by its owner or staff), and one button per row.
   See below for its two tabs.
 - **The script's own page**, where a badge shows Online or Offline, with a button to flip
   it for those who may.

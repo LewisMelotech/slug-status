@@ -109,3 +109,18 @@ An unowned script is not open to everyone here, as it is for adding versions, be
 is shown as the script's own. The file is checked as the upload form checks one: a `.pdf`
 that starts like a PDF, within the size limit. `UPLOAD_DISABLED` holds owners to it as it
 does uploads, and lets staff through.
+
+## Minecraft Customisations
+
+Each script has one free-text **Minecraft Customisations** field, for how it is set up on
+the Minecraft server, such as its colour (the **?** beside it says as much). It belongs to
+the script, not a version, and is shown on the Server page for whoever deploys it.
+
+- **Uploading or importing a new script** sets it, for whoever does so, signed in or not.
+- **Afterwards**, the same people as for PDFs above can change it: the owner, staff and
+  superusers, or staff alone for a script with no owner. They see it, pre-filled, when
+  uploading a new version, and as an edit box on the script page. Nobody else sees it there.
+- **Importing into a script that was already here** only changes it for those people.
+  Anyone else is told it was left as it was, and an empty box changes nothing.
+
+It is not held to `UPLOAD_DISABLED`, since nothing is uploaded, and it is not in the API.

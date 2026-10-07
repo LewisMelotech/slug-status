@@ -55,7 +55,7 @@ def script(owner_id=None):
     ],
 )
 def test_only_the_owner_and_staff_may_upload_a_pdf(owner_id, user, allowed):
-    assert script(owner_id).may_upload_pdfs(user) is allowed
+    assert script(owner_id).may_manage(user) is allowed
 
 
 # --- The route ------------------------------------------------------------------------------

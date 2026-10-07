@@ -1,0 +1,6 @@
+{% comment %}
+A "?" that shows ``text`` as a tooltip on hover or focus. base.html switches Bootstrap's
+tooltips on; without JavaScript the title still shows as the browser's own tooltip.
+{% endcomment %}
+<span class="badge badge-pill badge-secondary" data-toggle="tooltip" data-placement="right" title="{{ text }}"
+      tabindex="0" role="img" aria-label="{{ text }}" style="cursor: help">?</span>

@@ -147,8 +147,8 @@ Without the `sync` service, run it from cron on the host instead, daily at 09:00
 ## From the web UI
 
 **Import** sits in the site's navigation next to Upload, at `/script/import`, and the
-upload page links to it. Paste an id or a link, choose whether to keep it linked, and
-submit. Every version missing here comes across, and the imported script's page opens with
+upload page links to it. Paste an id or a link, choose whether to keep it linked, optionally
+fill in its **Minecraft Customisations** (see `ACCOUNTS.md`), and submit. Every version missing here comes across, and the imported script's page opens with
 a summary of what did.
 
 It is open to whoever may upload, including anonymous visitors, because importing a

@@ -1,0 +1,11 @@
+{% load bootstrap4 %}
+{% comment %}
+The upload and import forms' Minecraft Customisations box, with its hint as a "?" tooltip
+rather than help text. ``field`` is the bound form field.
+{% endcomment %}
+<div class="form-group m-1">
+    <label for="{{ field.id_for_label }}">
+        {{ field.label }} {% include "help_tooltip.html" with text="e.g. script colour" %}
+    </label>
+    {% bootstrap_field field show_label=False form_group_class="mb-0" %}
+</div>

@@ -299,7 +299,11 @@ class ScriptView(generic.DetailView):
         )
 
         context["can_delete"] = self.request.user == current_script.script.owner
-        context["can_upload_pdf"] = current_script.script.may_upload_pdfs(self.request.user)
+        context["can_manage"] = current_script.script.may_manage(self.request.user)
+        if context["can_manage"]:
+            context["customisations_form"] = forms.MinecraftCustomisationsForm(
+                initial={"minecraft_customisations": current_script.script.minecraft_customisations}
+            )
         context["script_tool_link"] = (
             f"https://script.bloodontheclocktower.com?script={script_json.compress_json(current_script.content)}"
         )
@@ -409,6 +413,7 @@ class BaseScriptUploadView(generic.FormView):
             initial["version"] = script_version.version
             if script_version.notes:
                 initial["notes"] = script_version.notes
+            initial["minecraft_customisations"] = script.minecraft_customisations
 
         return initial
 
@@ -446,6 +451,12 @@ class BaseScriptUploadView(generic.FormView):
                 if script:
                     form.fields.pop("anonymous")
                     form.fields.get("name").disabled = True
+
+        # An existing script's Minecraft customisations are its owner's and staff's to change,
+        # whether or not whoever is adding a version is signed in.
+        script_pk = self.request.GET.get("script", None)
+        if script_pk and not models.Script.objects.get(pk=script_pk).may_manage(self.request.user):
+            form.fields.pop("minecraft_customisations")
 
         return form
 
@@ -509,6 +520,15 @@ class ScriptUploadView(BaseScriptUploadView):
         if created and user.is_authenticated and not form.cleaned_data.get("anonymous", True):
             script.owner = user
             script.save()
+
+        # Whoever creates a script sets its Minecraft customisations; on an existing one only
+        # someone who may manage it can change them. The box is pre-filled with what the
+        # script has, so an empty one is a deliberate clear.
+        if "minecraft_customisations" in form.cleaned_data and (created or script.may_manage(user)):
+            customisations = form.cleaned_data["minecraft_customisations"].strip()
+            if customisations != script.minecraft_customisations:
+                script.minecraft_customisations = customisations
+                script.save(update_fields=["minecraft_customisations"])
 
         # Temporarily remove getting information from the _meta fields due to them
         # not including spaces.
@@ -1534,6 +1554,22 @@ class ScriptImportView(generic.FormView):
         if script and script.sync_enabled:
             messages.info(self.request, f"Linked to {script.upstream_url}; sync_upstream will follow it.")
 
+        customisations = form.cleaned_data.get("minecraft_customisations", "").strip()
+        if script and customisations and customisations != script.minecraft_customisations:
+            # A script this import created is the importer's to set up, as an upload's is;
+            # one that was already here is its owner's and staff's. Unlike the upload page,
+            # the box starts empty, so an empty one changes nothing.
+            created = bool(imported) and script.versions.count() == len(imported)
+            if created or script.may_manage(self.request.user):
+                script.minecraft_customisations = customisations
+                script.save(update_fields=["minecraft_customisations"])
+            else:
+                messages.warning(
+                    self.request,
+                    "The Minecraft customisations were left as they were: only the script's owner or staff "
+                    "can change them on a script that was already here.",
+                )
+
         self.script = script
         return super().form_valid(form)
 
@@ -1655,10 +1691,39 @@ def set_script_slug(request, pk: int):
     return redirect(get_safe_redirect_url(request.POST.get("next"), request.get_host(), request.is_secure(), fallback))
 
 
+def set_minecraft_customisations(request, pk: int):
+    """Change a script's Minecraft customisations from its script page.
+
+    For the script's owner and staff only; see Script.may_manage. POST only. Not held to
+    the upload switch: nothing is uploaded, and it is how a script is set up on the server.
+    """
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+
+    script = get_object_or_404(models.Script.objects, pk=pk)
+    if not script.may_manage(request.user):
+        raise PermissionDenied("Only the script's owner or staff can change its Minecraft customisations.")
+
+    form = forms.MinecraftCustomisationsForm(request.POST)
+    if form.is_valid():
+        script.minecraft_customisations = form.cleaned_data["minecraft_customisations"].strip()
+        script.save(update_fields=["minecraft_customisations"])
+        if script.minecraft_customisations:
+            messages.success(request, f"Minecraft customisations saved for {script.name}.")
+        else:
+            messages.success(request, f"Minecraft customisations cleared for {script.name}.")
+    else:
+        for error in form.errors.get("minecraft_customisations", ["Those customisations could not be saved."]):
+            messages.error(request, str(error))
+
+    fallback = reverse("script", kwargs={"pk": script.pk})
+    return redirect(get_safe_redirect_url(request.POST.get("next"), request.get_host(), request.is_secure(), fallback))
+
+
 def upload_version_pdf(request, pk: int, version: str):
     """Give an existing version a PDF, or replace the one it has, without a new version.
 
-    For the script's owner and staff only; see Script.may_upload_pdfs. Imports and sync
+    For the script's owner and staff only; see Script.may_manage. Imports and sync
     bring no PDFs, which botcscripts.com does not permit, so this is how a version they
     added gets one. POST only, held to the upload switch as uploading is, and the file
     is checked as the upload form checks one.
@@ -1672,7 +1737,7 @@ def upload_version_pdf(request, pk: int, version: str):
         )
     except (ValueError, NotImplementedError) as exc:
         raise Http404("No such version.") from exc
-    if not script_version.script.may_upload_pdfs(request.user):
+    if not script_version.script.may_manage(request.user):
         raise PermissionDenied("Only the script's owner or staff can upload a PDF for it.")
     if settings.UPLOAD_DISABLED and not request.user.is_staff:
         raise PermissionDenied("Uploads are currently disabled.")

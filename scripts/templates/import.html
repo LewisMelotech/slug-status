@@ -17,7 +17,8 @@
 <div class="col-md-6 col-lg-6 p-0">
   <form method="post">
     {% csrf_token %}
-    {% bootstrap_form form %}
+    {% bootstrap_form form exclude="minecraft_customisations" %}
+    {% include "minecraft_customisations.html" with field=form.minecraft_customisations %}
     {% buttons %}
       {% if UPLOAD_DISABLED and not user.is_staff %}
         <button type="submit" class="btn btn-primary" disabled>{% trans 'Import' %}</button>

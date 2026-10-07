@@ -48,6 +48,7 @@
         <th>Script</th>
         <th>Version</th>
         <th>On the server</th>
+        <th>Minecraft customisations</th>
         <th>Author</th>
         <th>Added by</th>
         <th>Added</th>
@@ -67,6 +68,7 @@
             <span class="text-muted">{% trans 'nothing yet' %}</span>
           {% endif %}
         </td>
+        <td>{{ version.script.minecraft_customisations|linebreaksbr|default:"—" }}</td>
         <td>{{ version.author|default:"—" }}</td>
         <td>{{ version.script.owner|default:"anonymous" }}</td>
         <td>{{ version.created|date:"j M Y, H:i" }}</td>
