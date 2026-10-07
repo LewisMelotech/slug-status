@@ -235,10 +235,12 @@ DISCORD_ARRIVALS_WEBHOOK_MENTION = os.getenv("DISCORD_ARRIVALS_WEBHOOK_MENTION",
 DISCORD_ONLINE_WEBHOOK_URL = os.getenv("DISCORD_ONLINE_WEBHOOK_URL", "").strip()
 DISCORD_ONLINE_WEBHOOK_MENTION = os.getenv("DISCORD_ONLINE_WEBHOOK_MENTION", "").strip()
 
-# Absolute base for links in announcements. Nothing outside a request knows the site's own
-# address, and the sync container never has one, so it is configured rather than derived.
-# Left blank, the first CSRF trusted origin is used, which is the same public origin in
-# any deployment that has one.
+# Absolute base for this site's own links where a request cannot say what it is. Announcements
+# use it: nothing outside a request knows the site's own address, and the sync container
+# never has one, so it is configured rather than derived. Left blank, the first CSRF trusted
+# origin is used, which is the same public origin in any deployment that has one. The JSON
+# link copied from a script's page uses it too, and falls back to the address the page was
+# loaded from, since that one is in a browser and always has one.
 SITE_URL = os.getenv("SITE_URL", "").strip().rstrip("/")
 
 # Allow CORS access to the API for GETs only.

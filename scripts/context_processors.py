@@ -7,6 +7,7 @@ def custom_configuration(request):
     return {
         "UPLOAD_DISABLED": settings.UPLOAD_DISABLED,
         "BANNER": settings.BANNER,
+        "SITE_URL": settings.SITE_URL,
         "awaiting_deployment": _awaiting_deployment(request),
     }
 

@@ -65,10 +65,10 @@ it carries no other access.
 | `DISCORD_ARRIVALS_WEBHOOK_MENTION` | *(blank)* | Prepended to each announcement, e.g. `<@&123456789012345678>` for a role, or `@here`. |
 | `DISCORD_ONLINE_WEBHOOK_URL` | *(blank)* | The deployment webhook. Blank switches deployment announcements off. |
 | `DISCORD_ONLINE_WEBHOOK_MENTION` | *(blank)* | Same as above, for deployment announcements only. |
-| `SITE_URL` | *(blank)* | Absolute base for the links in an announcement, e.g. `https://scripts.example.com`. Falls back to the first `CSRF_TRUSTED_ORIGINS` entry. Shared by both. |
+| `SITE_URL` | *(blank)* | Absolute base for the links in an announcement, e.g. `https://scripts.example.com`. Falls back to the first `CSRF_TRUSTED_ORIGINS` entry. Shared by both. The JSON link copied from a script's page uses it too, and with none set uses the address the page was loaded from. |
 
 `SITE_URL` exists because nothing outside a web request knows the site's own address, and
-the container that runs the hourly sync never has one. Without it — and without a trusted
+the container that runs the daily sync never has one. Without it — and without a trusted
 origin to borrow — announcements still send, just with no link back to the script.
 
 Mentions must be ids, not names — `@lewis` is sent as plain text and pings nobody,

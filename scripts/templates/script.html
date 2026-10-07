@@ -57,7 +57,10 @@
     }    
   
     function CopyLink() {
-        navigator.clipboard.writeText("https://www.botcscripts.com/api/scripts/{{script_version.pk}}/json/")
+        // This instance's own address: SITE_URL when one is configured, and otherwise the
+        // address this page was loaded from, so the link works wherever it is pasted.
+        const base = "{{ SITE_URL|escapejs }}" || window.location.origin;
+        navigator.clipboard.writeText(base + "{% url 'scriptversion-json' script_version.pk %}")
         showAndDismissAlert("Link Copied to Clipboard")
     }
 </script>
