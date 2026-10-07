@@ -147,14 +147,17 @@ class UpstreamClient:
         return self._json(url)
 
     def newest_versions(self, page=1):
-        """One page of the latest version of every script, newest first.
+        """One page of every version of every script, newest first.
 
         {count, next, results}, where each result is a version row like ``version`` returns,
-        content and all. Left to its defaults the list leaves out hybrid and homebrew
-        scripts, which can be linked here as well as any other, so it is asked for both.
+        content and all. Left to its defaults the list holds only each script's latest
+        version and leaves out hybrid and homebrew scripts, so it is asked for all three:
+        a script that gains two versions between reads shows both, and any script can be
+        linked here.
         """
         return self._json(
-            f"/api/scripts/?format=json&ordering=-pk&include_hybrid=true&include_homebrew=true&page={page}"
+            "/api/scripts/?format=json&ordering=-pk&all_scripts=true&include_hybrid=true"
+            f"&include_homebrew=true&page={page}"
         )
 
     def search(self, query, limit=10):
@@ -361,8 +364,13 @@ def import_script(
 
     Takes every version the source has and this instance does not, so a first import
     brings the script's whole history. ``latest_only`` narrows that to the source's latest
-    version, when it is newer than the newest held here, which is all routine sync asks
-    for; see ``sync_script``.
+    version, when it is newer than the newest held here; see ``sync_script``.
+
+    The source is asked for the script's list of versions, then each wanted version's
+    content comes from the rows the daily sync has stored where it can. If one missing
+    from them is newer than where that read has got to, the read runs now, once, since it
+    would find it. Anything older is a lookup of that one version. Then each version's PDF.
+    A new script whose versions are all stored costs one request plus one per PDF.
 
     Returns (script, imported, skipped) where imported is the list of ScriptVersions
     created and skipped counts the source's versions already held locally. ``user`` is
@@ -380,9 +388,20 @@ def import_script(
     script, _ = _target_script(source, upstream_id, detail.get("name"), user, enforce_owner)
 
     # Decided from the version list the source has already sent, so a version held here
-    # costs it nothing: only what is actually wanted is fetched, two requests apiece.
+    # costs it nothing.
     latest = _latest_of(versions, detail.get("latest_version")) if latest_only else None
     wanted, skipped = _select_versions(versions, _held_versions(script), latest)
+
+    stored = _stored_rows(source, [_upstream_pk(url) for _, url in wanted])
+    missing = [pk for pk in (_upstream_pk(url) for _, url in wanted) if pk is not None and pk not in stored]
+    last_seen = cursor_for(source)
+    if missing and (last_seen is None or max(missing) > last_seen):
+        # Newer than the daily read has got to, so it would find them: run it now, once,
+        # rather than look them up one at a time. If this script is linked it may also have
+        # added some of them itself, so what is wanted is decided again.
+        sync_source(source, client=client)
+        wanted, skipped = _select_versions(versions, _held_versions(script), latest)
+        stored = _stored_rows(source, [_upstream_pk(url) for _, url in wanted])
     if not wanted:
         # import_version records the check when it runs; nothing else will this time.
         _record_check(script, source, upstream_id, link)
@@ -393,7 +412,11 @@ def import_script(
     imported = []
     with notifications.batched():
         for version_number, url in wanted:
-            row = client.version(url)
+            row = stored.get(_upstream_pk(url))
+            if row is None:
+                # Older than anything the daily read has seen: a lookup of this one version.
+                row = client.version(url)
+                _store_rows(source, [row])
             pdf = client.pdf(upstream_id, row.get("version") or version_number)
             created = import_version(source, row, pdf=pdf, link=link, user=user, enforce_owner=enforce_owner)
             if created is None:
@@ -458,11 +481,11 @@ def sync_source(source, client=None):
     """Bring every script linked to ``source`` up to date, in one read of its newest versions.
 
     This is how the botcscripts.com maintainer asked instances to sync. /api/scripts/ lists
-    the latest version of every script, newest first, and version ids there only ever
-    increase. So reading it page by page until reaching the newest id seen last time finds
-    every script that has gained a version since, usually in one request. Each row already
-    carries its content, so the only other request is the PDF of a new version of a script
-    linked here. Rows for other scripts are passed over.
+    versions newest first, and version ids there only ever increase. So reading it page by
+    page until reaching the newest id seen last time finds every version published since,
+    usually in one request. Each row carries its content: every one read is stored, for
+    imports to be served from, and every new version of a script linked here is added. The
+    only other request is each added version's PDF, once.
 
     With no cursor yet, only the first page is read, and the cursor starts from there: there
     is nothing to say how far back to look. Versions published before that are for
@@ -478,7 +501,7 @@ def sync_source(source, client=None):
     last_seen = cursor_for(source)
     result = SourceSync(source=source, first_run=last_seen is None)
 
-    rows, newest = [], None
+    seen, newest = [], None
     for page in range(1, MAX_PAGES + 1):
         payload = client.newest_versions(page)
         result.pages = page
@@ -491,21 +514,24 @@ def sync_source(source, client=None):
             if last_seen is not None and pk <= last_seen:
                 reached = True
                 break
-            if row.get("script_id") in linked:
-                rows.append(row)
+            seen.append(row)
         if reached or last_seen is None or not payload.get("next"):
             break
     else:
         result.limited = True
 
+    # Kept before anything is added, so a refusal partway through the PDFs loses none of it.
+    _store_rows(source, seen)
+
     with notifications.attributed("Synced", user=None, origin=source), notifications.batched():
-        # Oldest first, as an upload would arrive. Each row is a different script, since the
-        # list holds only latest versions.
-        for row in reversed(rows):
-            script = linked[row["script_id"]]
+        # Oldest first, as uploads would arrive, so each newer version takes the latest flag in turn.
+        for row in reversed(seen):
+            script = linked.get(row.get("script_id"))
+            if script is None:
+                continue
             version = row.get("version")
             try:
-                wanted, _ = _select_versions({version: None}, _held_versions(script), latest=version)
+                wanted, _ = _select_versions({version: None}, _held_versions(script))
                 if not wanted:
                     continue
                 pdf = client.pdf(row["script_id"], version)
@@ -522,6 +548,34 @@ def sync_source(source, client=None):
         _advance_cursor(source, newest)
     _mark_checked(source)
     return result
+
+
+def _upstream_pk(url):
+    """The version id at the end of a /api/scripts/<id>/ link, or None."""
+    last = urlparse(str(url)).path.rstrip("/").rsplit("/", 1)[-1]
+    return int(last) if last.isascii() and last.isdigit() else None
+
+
+def _stored_rows(source, pks):
+    """{version id: API row} for those of ``pks`` stored for ``source``."""
+    pks = [pk for pk in pks if pk is not None]
+    if not pks:
+        return {}
+    stored = models.UpstreamVersion.objects.filter(source=source, upstream_pk__in=pks)
+    return dict(stored.values_list("upstream_pk", "row"))
+
+
+def _store_rows(source, rows):
+    """Keep these API rows for ``source``, replacing any stored for the same versions."""
+    keep = [
+        models.UpstreamVersion(source=source, upstream_pk=row["pk"], script_id=row["script_id"], row=row)
+        for row in rows
+        if isinstance(row.get("pk"), int) and isinstance(row.get("script_id"), int)
+    ]
+    if keep:
+        models.UpstreamVersion.objects.bulk_create(
+            keep, update_conflicts=True, unique_fields=["source", "upstream_pk"], update_fields=["script_id", "row"]
+        )
 
 
 def _linked_by_upstream_id(source):

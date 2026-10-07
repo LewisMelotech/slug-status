@@ -30,11 +30,21 @@ stored like an uploaded one, and adding to an existing script follows the same
 [ownership rule](#who-may-import-into-an-existing-script).
 
 An import takes the script's **full history**: every version the source has, oldest
-first, so the newest ends up with the `latest` flag. It costs the source one request for
-the script's list of versions, then two for each version (the version and its PDF).
+first, so the newest ends up with the `latest` flag. What it asks the source:
 
-Importing is idempotent. A version already held here is never fetched again, so re-running
-asks the source for the version list only, reports `already held`, and writes nothing.
+1. The script's list of versions, from `/api/script_ids/<id>/`. Always one request.
+2. Each version not held here, from the rows the daily sync has stored (see
+   [Staying linked](#staying-linked)), which costs nothing. If one missing from them is
+   newer than where that read has got to, the read runs now, once, and finds it. One older
+   than that is looked up by itself, from `/api/scripts/<version id>/`, and stored too.
+3. Each version's PDF. One download per version, once.
+
+So a new script whose versions are all stored costs one request plus its PDFs: three
+versions, four requests. A version that has to be looked up adds one.
+
+Importing is idempotent. A version already held here is never fetched again, nor its PDF,
+so re-running asks the source for the version list only, reports `already held`, and
+writes nothing.
 
 ## Staying linked
 
@@ -55,28 +65,29 @@ the version on the server.
 [discussion #740](https://github.com/AdmiralGT/botc-scripts/discussions/740)), after this
 instance was blocked for looking every linked script up one at a time.
 
-`/api/scripts/` lists the latest version of every script, newest first, 50 to a page, and
-version ids there only ever go up. Sync reads that list from the top until it reaches the
-newest version id it saw on the previous run. Everything above that line is a script that
-has gained a version since, and any of them linked here is brought up to date from the row
-itself, which carries the script's content. It then remembers the newest id it saw, in an
-**Upstream cursor** row you can see in the admin.
+`/api/scripts/` lists versions newest first, 50 to a page, and version ids there only ever
+go up. Sync reads that list from the top until it reaches the newest version id it saw on
+the previous run. Everything above that line was published since, and every row carries
+the script's content. Sync stores **every** row it reads, for any script, so imports can
+be served from them, and adds every new version of a script linked here, oldest first. It
+then remembers the newest id it saw, in an **Upstream cursor** row you can see in the admin.
 
-So a run costs the source one request per 50 scripts that changed since the last run,
-which for a daily run is normally **one request**, however many scripts are linked here.
-The only other request is one PDF for each new version of a linked script, downloaded once,
-when the version arrives. A version already held here is never downloaded again, nor is its
-PDF. The list leaves out hybrid and homebrew scripts unless asked, so sync asks for both.
+Left to its defaults the list holds only each script's latest version, and leaves out
+hybrid and homebrew scripts. Sync asks for all of them, so a script that gained two versions
+since the last run gets both, and no linked script is missed for how it is classified.
+
+So a run costs the source one request per 50 versions published since the last run, which
+for a daily run is normally **one request**, however many scripts are linked here. The only
+other request is one PDF for each new version of a linked script, downloaded once, when the
+version arrives. A version already held here is never downloaded again, nor is its PDF.
 
 A few things follow from reading the list rather than each script:
 
-- **Only the latest version comes across.** If a script gained two versions since the last
-  run, the list only shows the newer one. Older versions missing here are left alone.
 - **The first run reads one page.** With no cursor yet, there is nothing to say how far
   back to look, so sync reads the newest page and starts the cursor from there.
-- **A long gap is capped.** A run reads at most 20 pages (a thousand changed scripts) and
+- **A long gap is capped.** A run reads at most 20 pages (a thousand versions) and
   says so if it stopped there. To look further back, lower `last_version_pk` on the cursor
-  in the admin before the next run, at a request per 50 scripts.
+  in the admin before the next run, at a request per 50 versions.
 
 To fill in what any of that left out for one script, check it by itself. That is a lookup
 of one known script, by hand, through `/api/script_ids/<id>/`: one request when nothing is
@@ -264,9 +275,15 @@ Four fields on `Script`:
 A unique constraint on `(upstream_source, upstream_id)` means a repeated import updates
 the script it already created rather than forking a second copy.
 
-And one `UpstreamCursor` row per instance synced from: `last_version_pk`, the newest version
+One `UpstreamCursor` row per instance synced from: `last_version_pk`, the newest version
 id seen there by the last sync, in that instance's numbering. It is created by the first
 sync, and sync reads down to it next time.
+
+And an `UpstreamVersion` row for every version the daily sync has read, or an import has
+looked up: the instance, the version's id and its script's id there, and the API's row for
+it, content and all. Imports are served from these. They are only ever added to or
+replaced, never removed, and start empty: the store holds what has been published since
+the first sync, plus whatever imports have looked up.
 
 ## Known limits
 

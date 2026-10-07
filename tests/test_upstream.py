@@ -615,10 +615,15 @@ class ServingClient:
             "latest_version": self._url(self.flagged) if self.flagged else None,
         }
 
+    def row(self, number):
+        """The API's row for a version: what a lookup returns, and what the daily read stores."""
+        pk = self.numbers.index(number)
+        return {"pk": pk, "script_id": 134, "name": "Sects and Violets", "version": number, "content": []}
+
     def version(self, url):
         number = self.numbers[int(url.strip("/").rsplit("/", 1)[-1])]
         self.asked.append(f"version {number}")
-        return {"script_id": 134, "name": "Sects and Violets", "version": number, "content": []}
+        return self.row(number)
 
     def pdf(self, upstream_id, version):
         # No PDF: what is under test is that it was asked for, not what came back.
@@ -627,12 +632,31 @@ class ServingClient:
 
 @pytest.fixture
 def held_here(monkeypatch):
-    """The database stubbed away: the versions held here, and what an import writes."""
+    """The database stubbed away: versions held here, rows stored, and what an import writes.
+
+    The cursor starts far ahead of every version id these tests use, so a version missing
+    from the store is looked up rather than sending the daily read early, unless a test
+    moves it back.
+    """
     from types import SimpleNamespace
 
     from scripts import upstream
 
-    state = SimpleNamespace(versions=[], written=[], checked=0)
+    state = SimpleNamespace(versions=[], written=[], checked=0, stored={}, cursor=10**9, early_reads=0)
+    state.on_early_read = lambda: None
+
+    def early_read(source, client=None):
+        state.early_reads += 1
+        state.on_early_read()
+
+    monkeypatch.setattr(
+        upstream, "_stored_rows", lambda source, pks: {pk: state.stored[pk] for pk in pks if pk in state.stored}
+    )
+    monkeypatch.setattr(
+        upstream, "_store_rows", lambda source, rows: state.stored.update({row["pk"]: row for row in rows})
+    )
+    monkeypatch.setattr(upstream, "cursor_for", lambda source: state.cursor)
+    monkeypatch.setattr(upstream, "sync_source", early_read)
     linked = held_script(upstream_source=DEFAULT_SOURCE)
     linked.upstream_id = 134
     state.script = linked
@@ -732,6 +756,68 @@ def test_importing_again_fetches_only_what_is_missing(held_here):
     _, _, skipped = import_script("134", client=client, user=None)
 
     assert client.asked == ["script", "version 1.2.0", "pdf 1.2.0"]
+    assert skipped == 2
+
+
+# --- An import served from what the daily read stored -----------------------------------
+
+
+def test_an_import_takes_stored_versions_from_the_store_and_fetches_only_their_pdfs(held_here):
+    client = ServingClient("1.0.0", "1.1.0")
+    held_here.stored = {pk: client.row(number) for pk, number in enumerate(client.numbers)}
+
+    import_script("134", client=client, user=None)
+
+    assert client.asked == ["script", "pdf 1.0.0", "pdf 1.1.0"]
+    assert held_here.written == ["1.0.0", "1.1.0"]
+    assert held_here.early_reads == 0
+
+
+def test_a_version_newer_than_the_daily_read_sends_it_early_once(held_here):
+    client = ServingClient("1.0.0", "1.1.0")
+    held_here.stored = {0: client.row("1.0.0")}
+    held_here.cursor = 0  # 1.1.0, version id 1, is newer than the read has got to
+
+    def read_finds_it():
+        held_here.stored[1] = client.row("1.1.0")
+
+    held_here.on_early_read = read_finds_it
+
+    import_script("134", client=client, user=None)
+
+    assert held_here.early_reads == 1
+    assert client.asked == ["script", "pdf 1.0.0", "pdf 1.1.0"]
+
+
+def test_a_version_older_than_the_daily_read_is_looked_up_and_stored(held_here):
+    client = ServingClient("1.0.0", "1.1.0")
+    held_here.stored = {1: client.row("1.1.0")}
+    held_here.cursor = 1  # 1.0.0, version id 0, is behind it: an early read would not find it
+
+    import_script("134", client=client, user=None)
+
+    assert held_here.early_reads == 0
+    assert client.asked == ["script", "version 1.0.0", "pdf 1.0.0", "pdf 1.1.0"]
+    assert 0 in held_here.stored
+
+
+def test_what_the_early_read_added_itself_is_not_fetched_again(held_here):
+    # A linked script: the early read adds its new version, PDF and all, so the import
+    # must not download that PDF a second time.
+    held_here.versions = ["1.0.0"]
+    client = ServingClient("1.0.0", "1.1.0")
+    held_here.cursor = 0
+
+    def read_adds_it():
+        held_here.stored[1] = client.row("1.1.0")
+        held_here.versions.append("1.1.0")
+
+    held_here.on_early_read = read_adds_it
+
+    _, imported, skipped = import_script("134", client=client, user=None)
+
+    assert client.asked == ["script"]
+    assert imported == []
     assert skipped == 2
 
 
@@ -869,16 +955,17 @@ class JSONResponse(FakeResponse):
         return self.payload
 
 
-def test_the_newest_versions_are_asked_for_newest_first_with_homebrew_and_hybrid():
-    # Left to its defaults the list leaves out hybrid and homebrew scripts, and a new
-    # version of a linked one of those would never be seen.
+def test_the_newest_versions_are_asked_for_newest_first_every_one_of_them():
+    # Left to its defaults the list holds only latest versions, and leaves out hybrid and
+    # homebrew scripts: a version published between reads, or any version of a linked hybrid
+    # or homebrew script, would never be seen.
     session = FakeSession(JSONResponse({"results": [], "next": None}))
 
     UpstreamClient(session=session).newest_versions(2)
 
     (url,) = session.requested
     assert url.startswith(f"{DEFAULT_SOURCE}/api/scripts/?")
-    for part in ("ordering=-pk", "include_hybrid=true", "include_homebrew=true", "page=2"):
+    for part in ("ordering=-pk", "all_scripts=true", "include_hybrid=true", "include_homebrew=true", "page=2"):
         assert part in url
 
 
@@ -911,7 +998,7 @@ def feed(monkeypatch):
 
     from scripts import upstream
 
-    state = SimpleNamespace(linked={}, held={}, cursor=None, written=[], checked=0)
+    state = SimpleNamespace(linked={}, held={}, cursor=None, written=[], checked=0, stored=[])
 
     def link(upstream_id, *held):
         state.linked[upstream_id] = SimpleNamespace(name=f"Script {upstream_id}", upstream_id=upstream_id)
@@ -933,6 +1020,7 @@ def feed(monkeypatch):
     monkeypatch.setattr(upstream, "cursor_for", lambda source: state.cursor)
     monkeypatch.setattr(upstream, "_advance_cursor", advance)
     monkeypatch.setattr(upstream, "_mark_checked", check)
+    monkeypatch.setattr(upstream, "_store_rows", lambda source, rows: state.stored.extend(row["pk"] for row in rows))
     monkeypatch.setattr(upstream, "import_version", write)
     return state
 
@@ -969,21 +1057,33 @@ def test_a_sync_with_nothing_new_costs_one_request(feed):
     assert feed.cursor == 110
 
 
-def test_only_new_versions_of_linked_scripts_are_imported_and_only_they_cost_a_pdf(feed):
+def test_every_new_version_of_a_linked_script_is_added_oldest_first_with_its_pdf(feed):
     from scripts.upstream import sync_source
 
     feed.cursor = 100
-    feed.link(2, "1.0.0")  # gains 1.1.0
-    feed.link(3, "2.0.0")  # already holds the latest
-    feed.link(4, "3.0.0")  # holds something newer than the source's latest
-    client = FeedClient([(110, 1, "1.0.0"), (109, 2, "1.1.0"), (108, 3, "2.0.0"), (107, 4, "2.5.0"), (100, 5, "1.0.0")])
+    feed.link(2, "1.0.0")  # gains 1.1.0 and then 1.2.0
+    feed.link(3, "2.0.0")  # already holds what was published
+    client = FeedClient([(110, 1, "1.0.0"), (109, 2, "1.2.0"), (108, 3, "2.0.0"), (107, 2, "1.1.0"), (100, 5, "1.0.0")])
 
     result = sync_source(DEFAULT_SOURCE, client=client)
 
-    # Script 1 is not linked here; its row costs nothing beyond the page it was on.
-    assert client.asked == ["page 1", "pdf 2 1.1.0"]
-    assert feed.written == [(2, "1.1.0")]
-    assert [version.version for version in result.imported] == ["1.1.0"]
+    # Both new versions, so the newer takes the latest flag; one PDF each, once. Script 1 is
+    # not linked here and costs nothing beyond the page it was on.
+    assert feed.written == [(2, "1.1.0"), (2, "1.2.0")]
+    assert client.asked == ["page 1", "pdf 2 1.1.0", "pdf 2 1.2.0"]
+    assert [version.version for version in result.imported] == ["1.1.0", "1.2.0"]
+
+
+def test_every_row_read_is_stored_for_imports_linked_or_not(feed):
+    from scripts.upstream import sync_source
+
+    feed.cursor = 107
+    client = FeedClient([(110, 1, "1.0.0"), (109, 2, "1.0.0"), (108, 3, "1.0.0"), (107, 4, "1.0.0")])
+
+    sync_source(DEFAULT_SOURCE, client=client)
+
+    # Not 107: that one was stored by the run that saw it first.
+    assert sorted(feed.stored) == [108, 109, 110]
 
 
 def test_the_first_sync_reads_one_page_and_starts_from_there(feed):

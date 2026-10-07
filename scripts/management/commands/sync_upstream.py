@@ -1,10 +1,11 @@
 """Pull new versions for every script linked to an upstream instance.
 
 Safe to run on a timer: it only ever adds versions upstream has and this instance does
-not. Each source is read once, through its list of the newest version of every script,
-from the newest down to the newest version seen on the last run: usually one request.
-The only other requests are the PDFs of new versions of scripts linked here. This is the
-approach the botcscripts.com maintainer asked for, and once a day is the most it should run.
+not. Each source is read once, through its list of versions newest first, down to the
+newest version seen on the last run: usually one request. Every row read is stored for
+imports to use, and every new version of a script linked here is added; the only other
+requests are their PDFs, once each. This is the approach the botcscripts.com maintainer
+asked for, and once a day is the most it should run.
 
 `--script <id>` checks one script by itself instead, and `--full --script <id>` fetches
 every version missing from it, the way a first import does. Both are for running by hand.
