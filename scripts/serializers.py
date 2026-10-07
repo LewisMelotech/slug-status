@@ -131,21 +131,18 @@ class ScriptSlugSerializer(serializers.ModelSerializer):
 
 class ScriptImportSerializer(serializers.Serializer):
     """
-    Write serializer for the import endpoint. `reference` is a script id or a link
-    to a script page on the instance being imported from; `source` says which
-    instance a bare id belongs to.
+    Write serializer for the import endpoint. `reference` is a script's id on
+    botcscripts.com, or a link to its page there; a link to anywhere else is refused.
     """
 
     reference = serializers.CharField(required=True, allow_blank=False)
-    source = serializers.CharField(required=False, allow_blank=False, default=upstream.DEFAULT_SOURCE)
     link = serializers.BooleanField(required=False, default=True)
 
     def validate(self, attrs):
-        # Resolve here so a bad reference or unreachable-looking source is a 400 from
-        # the serializer, in the same shape as every other validation error, rather
-        # than an exception escaping the view.
+        # Resolved here so a bad reference is a 400 from the serializer, in the same shape
+        # as every other validation error, rather than an exception escaping the view.
         try:
-            attrs["source"], attrs["upstream_id"] = upstream.parse_reference(attrs["reference"], attrs["source"])
+            attrs["upstream_id"] = upstream.parse_reference(attrs["reference"])
         except upstream.UpstreamError as exc:
             raise serializers.ValidationError({"reference": [str(exc)]}) from exc
         return attrs

@@ -74,14 +74,13 @@ class ScriptViewSet(viewsets.ReadOnlyModelViewSet):
     @action(methods=["post"], detail=False, url_path="import")
     def import_upstream(self, request):
         """
-        Import a script from another botc-scripts instance.
+        Import a script from botcscripts.com.
 
         POST /api/script_ids/import/ with {"reference": "134"} imports every version
-        of script 134 from the public site that is not already held here; "reference"
-        also accepts a link to a script page, and "source" names a different instance
-        for a bare id. Pass {"link": false} for a one-time copy that sync_upstream will
-        not follow. Requires the
-        scripts.api_write_permission permission. When a script of the same name
+        of script 134 there that is not already held here; "reference" also accepts a
+        link to the script's page there, and a link to anywhere else is a 400. Pass
+        {"link": false} for a one-time copy that sync_upstream will not follow. Requires
+        the scripts.api_write_permission permission. When a script of the same name
         already exists and has an owner, only that owner may import into it: 403.
         Refused with 403 while UPLOAD_DISABLED is set, except for staff, as uploads are.
         """
@@ -95,7 +94,6 @@ class ScriptViewSet(viewsets.ReadOnlyModelViewSet):
             with notifications.attributed("Imported"):
                 script, imported, skipped = upstream.import_script(
                     data["upstream_id"],
-                    source=data["source"],
                     link=data["link"],
                     user=request.user,
                 )
@@ -113,7 +111,7 @@ class ScriptViewSet(viewsets.ReadOnlyModelViewSet):
             "script": serializers.ScriptSerializer(script, context=self.get_serializer_context()).data,
             "imported": [str(version.version) for version in imported],
             "skipped": skipped,
-            "source": data["source"],
+            "source": upstream.SOURCE,
             "upstream_id": data["upstream_id"],
             "linked": bool(script and script.sync_enabled),
         }

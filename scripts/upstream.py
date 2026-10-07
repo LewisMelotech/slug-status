@@ -1,9 +1,9 @@
-"""Importing scripts from another botc-scripts instance, and keeping them in step.
+"""Importing scripts from botcscripts.com, and keeping them in step.
 
-The public site at botcscripts.com is the usual source, but nothing here is specific
-to it: any instance exposing the same read API works, including another copy of this
-one. Only the public read endpoints are used, so no credentials are needed on the far
-side.
+Only the official site is imported from. Its maintainer has said how its API may be used
+(AdmiralGT/botc-scripts#740), and the sync here is built to that; another instance would
+have no such agreement, and supporting one meant a source to carry through every step.
+Only the public read endpoints are used, so no credentials are needed there.
 """
 
 import logging
@@ -20,7 +20,9 @@ from scripts import models, notifications, script_json
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SOURCE = "https://www.botcscripts.com"
+SOURCE = "https://www.botcscripts.com"
+# A link to a script there may name either; everything is fetched from SOURCE regardless.
+SOURCE_HOSTS = ("www.botcscripts.com", "botcscripts.com")
 TIMEOUT = 30
 USER_AGENT = "botc-scripts-importer/1.0 (self-hosted instance)"
 
@@ -50,61 +52,25 @@ class Blocked(UpstreamError):
 BLOCKED_STATUSES = (403, 429)
 
 
-def normalise_source(source):
-    """Reduce a source to a bare scheme://host[:port], so links compare equal."""
-    source = str(source or "").strip()
-    parsed = urlparse(source if "//" in source else f"https://{source}")
-    host = parsed.netloc
-    # urlparse invents a netloc from almost any string, so check the host looks like
-    # one rather than trusting that it parsed at all.
-    if parsed.scheme not in ("http", "https") or not host or any(c.isspace() for c in host):
-        raise UpstreamError(f"'{source}' is not a usable instance URL.")
-    return f"{parsed.scheme}://{host}"
-
-
-def allowed_sources():
-    """The instances an ordinary uploader may import from, normalised."""
-    from django.conf import settings
-
-    configured = getattr(settings, "IMPORT_SOURCES", None) or [DEFAULT_SOURCE]
-    allowed = []
-    for source in configured:
-        try:
-            allowed.append(normalise_source(source))
-        except UpstreamError:
-            logger.warning("Ignoring unusable entry in IMPORT_SOURCES: %r", source)
-    return allowed or [DEFAULT_SOURCE]
-
-
-def may_import_from(source, user=None):
-    """Whether this user may pull from this instance.
-
-    The permission that guards the write API also lifts the source restriction; for
-    everyone else the source has to be one this instance has nominated, because the
-    fetch happens from the server rather than from the visitor's browser.
-    """
-    if user is not None and getattr(user, "is_authenticated", False) and user.has_perm("scripts.api_write_permission"):
-        return True
-    return normalise_source(source) in allowed_sources()
-
-
-def parse_reference(reference, default_source=DEFAULT_SOURCE):
-    """Turn '134', a '/script/134' path, or a full URL into (source, script_id)."""
+def parse_reference(reference):
+    """Turn '134', a '/script/134' path, or a link to a script on botcscripts.com into its id."""
     reference = str(reference).strip()
     if reference.isascii() and reference.isdigit():
-        return normalise_source(default_source), int(reference)
+        return int(reference)
 
     parsed = urlparse(reference if "//" in reference else f"https://{reference}")
-    parts = [p for p in parsed.path.split("/") if p]
-    for part in parts:
-        if part.isascii() and part.isdigit():
-            return normalise_source(f"{parsed.scheme}://{parsed.netloc}"), int(part)
-    raise UpstreamError(f"Could not find a script id in '{reference}'. Give an id, or a link to a script page.")
+    script_id = next((int(part) for part in parsed.path.split("/") if part.isascii() and part.isdigit()), None)
+    if script_id is None:
+        raise UpstreamError(f"Could not find a script id in '{reference}'. Give an id, or a link to a script page.")
+    # A bare path has no host, and means the official site like a bare id does.
+    if parsed.hostname and parsed.hostname.lower() not in SOURCE_HOSTS:
+        raise UpstreamError(f"Scripts can only be imported from botcscripts.com, not {parsed.hostname}.")
+    return script_id
 
 
 class UpstreamClient:
-    def __init__(self, source=DEFAULT_SOURCE, timeout=TIMEOUT, session=None):
-        self.source = normalise_source(source)
+    def __init__(self, timeout=TIMEOUT, session=None):
+        self.source = SOURCE
         self.timeout = timeout
         self.session = session or requests.Session()
         # Assigned, not setdefault: a Session always carries a python-requests
@@ -214,7 +180,7 @@ def _counts(content):
     }
 
 
-def _target_script(source, upstream_id, name, user=None, enforce_owner=True):
+def _target_script(upstream_id, name, user=None, enforce_owner=True):
     """The local Script for this upstream one: the linked one, else by name, else new.
 
     A script found by its link is the source's own, so anyone may import into it: what
@@ -227,7 +193,7 @@ def _target_script(source, upstream_id, name, user=None, enforce_owner=True):
     act as the operator rather than for a visitor, the command line and sync, pass
     ``enforce_owner=False``. Forgetting to say leaves the rule on.
     """
-    script = models.Script.objects.filter(upstream_source=source, upstream_id=upstream_id).first()
+    script = models.Script.objects.filter(upstream_source=SOURCE, upstream_id=upstream_id).first()
     if script:
         return script, False
     script = models.Script.objects.filter(name=name).first()
@@ -241,10 +207,10 @@ def _target_script(source, upstream_id, name, user=None, enforce_owner=True):
     return models.Script(name=name), True
 
 
-def _record_check(script, source, upstream_id, link):
+def _record_check(script, upstream_id, link):
     """Note that the source was asked about ``script`` just now, linking it if wanted."""
     if link:
-        script.upstream_source = source
+        script.upstream_source = SOURCE
         script.upstream_id = upstream_id
         script.sync_enabled = True
     script.last_synced = timezone.now()
@@ -294,22 +260,21 @@ def _select_versions(available, held, latest=None):
 
 
 @transaction.atomic
-def import_version(source, row, pdf=None, link=True, user=None, enforce_owner=True):
+def import_version(row, pdf=None, link=True, user=None, enforce_owner=True):
     """Create one ScriptVersion from an upstream version row.
 
     Returns the new ScriptVersion, or None when that version is already held locally.
     Raises NotOwner when ``user`` may not import into the script it matches; see
     ``_target_script``.
     """
-    source = normalise_source(source)
     upstream_id = row.get("script_id")
     name = row.get("name")
     version = row.get("version")
     if not (upstream_id and name and version):
         raise UpstreamError(f"Upstream version row is missing script_id, name or version: {row!r}")
 
-    script, is_new = _target_script(source, upstream_id, name, user, enforce_owner)
-    _record_check(script, source, upstream_id, link)
+    script, is_new = _target_script(upstream_id, name, user, enforce_owner)
+    _record_check(script, upstream_id, link)
 
     if not is_new and script.versions.filter(version=version).exists():
         return None
@@ -353,7 +318,6 @@ def import_version(source, row, pdf=None, link=True, user=None, enforce_owner=Tr
 
 def import_script(
     reference,
-    source=DEFAULT_SOURCE,
     link=True,
     client=None,
     user=None,
@@ -376,35 +340,35 @@ def import_script(
     created and skipped counts the source's versions already held locally. ``user`` is
     who is importing; see ``_target_script`` for the ownership rule and ``enforce_owner``.
     """
-    source, upstream_id = parse_reference(reference, source)
-    client = client or UpstreamClient(source)
+    upstream_id = parse_reference(reference)
+    client = client or UpstreamClient()
     detail = client.script(upstream_id)
     versions = detail.get("versions") or {}
     if not versions:
-        raise UpstreamError(f"Script {upstream_id} on {source} has no versions to import.")
+        raise UpstreamError(f"Script {upstream_id} on {SOURCE} has no versions to import.")
 
     # Refused here, before anything else is fetched: every version and its PDF is a request
     # to someone else's server, and a refusal does not need any of them.
-    script, _ = _target_script(source, upstream_id, detail.get("name"), user, enforce_owner)
+    script, _ = _target_script(upstream_id, detail.get("name"), user, enforce_owner)
 
     # Decided from the version list the source has already sent, so a version held here
     # costs it nothing.
     latest = _latest_of(versions, detail.get("latest_version")) if latest_only else None
     wanted, skipped = _select_versions(versions, _held_versions(script), latest)
 
-    stored = _stored_rows(source, [_upstream_pk(url) for _, url in wanted])
+    stored = _stored_rows([_upstream_pk(url) for _, url in wanted])
     missing = [pk for pk in (_upstream_pk(url) for _, url in wanted) if pk is not None and pk not in stored]
-    last_seen = cursor_for(source)
+    last_seen = cursor_for()
     if missing and (last_seen is None or max(missing) > last_seen):
         # Newer than the daily read has got to, so it would find them: run it now, once,
         # rather than look them up one at a time. If this script is linked it may also have
         # added some of them itself, so what is wanted is decided again.
-        sync_source(source, client=client)
+        sync_source(client=client)
         wanted, skipped = _select_versions(versions, _held_versions(script), latest)
-        stored = _stored_rows(source, [_upstream_pk(url) for _, url in wanted])
+        stored = _stored_rows([_upstream_pk(url) for _, url in wanted])
     if not wanted:
         # import_version records the check when it runs; nothing else will this time.
-        _record_check(script, source, upstream_id, link)
+        _record_check(script, upstream_id, link)
 
     # One announcement for the import, not one per version: pulling a script's whole
     # history writes a row per version, and that is still only one new script worth
@@ -416,18 +380,18 @@ def import_script(
             if row is None:
                 # Older than anything the daily read has seen: a lookup of this one version.
                 row = client.version(url)
-                _store_rows(source, [row])
+                _store_rows([row])
             pdf = client.pdf(upstream_id, row.get("version") or version_number)
-            created = import_version(source, row, pdf=pdf, link=link, user=user, enforce_owner=enforce_owner)
+            created = import_version(row, pdf=pdf, link=link, user=user, enforce_owner=enforce_owner)
             if created is None:
                 # Arrived here by another route since the list was compared.
                 skipped += 1
-                logger.info("Already held %s %s from %s", detail.get("name"), version_number, source)
+                logger.info("Already held %s %s", detail.get("name"), version_number)
             else:
                 imported.append(created)
-                logger.info("Imported %s %s from %s", detail.get("name"), version_number, source)
+                logger.info("Imported %s %s", detail.get("name"), version_number)
 
-    script = models.Script.objects.filter(upstream_source=source, upstream_id=upstream_id).first()
+    script = models.Script.objects.filter(upstream_source=SOURCE, upstream_id=upstream_id).first()
     if script is None:
         script = models.Script.objects.filter(name=detail.get("name")).first()
     return script, imported, skipped
@@ -444,12 +408,11 @@ def sync_script(script, client=None, full=False):
 
     Returns the list of ScriptVersions created, which is empty when already in step.
     """
-    if not (script.upstream_source and script.upstream_id):
-        raise UpstreamError(f"{script} is not linked to an upstream instance.")
-    with notifications.attributed("Synced", user=None, origin=script.upstream_source):
+    if not script.upstream_id or script.upstream_source != SOURCE:
+        raise UpstreamError(f"{script} is not linked to a script on botcscripts.com.")
+    with notifications.attributed("Synced", user=None, origin=SOURCE):
         _, imported, _ = import_script(
             script.upstream_id,
-            source=script.upstream_source,
             link=True,
             client=client,
             # Sync follows scripts already linked to their source, and runs as the system.
@@ -469,7 +432,6 @@ MAX_PAGES = 20
 class SourceSync:
     """What one ``sync_source`` run did."""
 
-    source: str
     pages: int = 0
     first_run: bool = False
     limited: bool = False
@@ -477,8 +439,8 @@ class SourceSync:
     failed: list = field(default_factory=list)
 
 
-def sync_source(source, client=None):
-    """Bring every script linked to ``source`` up to date, in one read of its newest versions.
+def sync_source(client=None):
+    """Bring every linked script up to date, in one read of botcscripts.com's newest versions.
 
     This is how the botcscripts.com maintainer asked instances to sync. /api/scripts/ lists
     versions newest first, and version ids there only ever increase. So reading it page by
@@ -495,11 +457,10 @@ def sync_source(source, client=None):
     starts from the same place next time. Versions it had already written are held by then,
     and are passed over rather than fetched again.
     """
-    source = normalise_source(source)
-    client = client or UpstreamClient(source)
-    linked = _linked_by_upstream_id(source)
-    last_seen = cursor_for(source)
-    result = SourceSync(source=source, first_run=last_seen is None)
+    client = client or UpstreamClient()
+    linked = _linked_by_upstream_id()
+    last_seen = cursor_for()
+    result = SourceSync(first_run=last_seen is None)
 
     seen, newest = [], None
     for page in range(1, MAX_PAGES + 1):
@@ -521,9 +482,9 @@ def sync_source(source, client=None):
         result.limited = True
 
     # Kept before anything is added, so a refusal partway through the PDFs loses none of it.
-    _store_rows(source, seen)
+    _store_rows(seen)
 
-    with notifications.attributed("Synced", user=None, origin=source), notifications.batched():
+    with notifications.attributed("Synced", user=None, origin=SOURCE), notifications.batched():
         # Oldest first, as uploads would arrive, so each newer version takes the latest flag in turn.
         for row in reversed(seen):
             script = linked.get(row.get("script_id"))
@@ -535,7 +496,7 @@ def sync_source(source, client=None):
                 if not wanted:
                     continue
                 pdf = client.pdf(row["script_id"], version)
-                created = import_version(source, row, pdf=pdf, link=True, enforce_owner=False)
+                created = import_version(row, pdf=pdf, link=True, enforce_owner=False)
             except Blocked:
                 raise
             except UpstreamError as exc:
@@ -545,8 +506,8 @@ def sync_source(source, client=None):
                 result.imported.append(created)
 
     if newest is not None and (last_seen is None or newest > last_seen):
-        _advance_cursor(source, newest)
-    _mark_checked(source)
+        _advance_cursor(newest)
+    _mark_checked()
     return result
 
 
@@ -556,53 +517,49 @@ def _upstream_pk(url):
     return int(last) if last.isascii() and last.isdigit() else None
 
 
-def _stored_rows(source, pks):
-    """{version id: API row} for those of ``pks`` stored for ``source``."""
+def _stored_rows(pks):
+    """{version id: API row} for those of ``pks`` that are stored."""
     pks = [pk for pk in pks if pk is not None]
     if not pks:
         return {}
-    stored = models.UpstreamVersion.objects.filter(source=source, upstream_pk__in=pks)
+    stored = models.UpstreamVersion.objects.filter(upstream_pk__in=pks)
     return dict(stored.values_list("upstream_pk", "row"))
 
 
-def _store_rows(source, rows):
-    """Keep these API rows for ``source``, replacing any stored for the same versions."""
+def _store_rows(rows):
+    """Keep these API rows, replacing any stored for the same versions."""
     keep = [
-        models.UpstreamVersion(source=source, upstream_pk=row["pk"], script_id=row["script_id"], row=row)
+        models.UpstreamVersion(upstream_pk=row["pk"], script_id=row["script_id"], row=row)
         for row in rows
         if isinstance(row.get("pk"), int) and isinstance(row.get("script_id"), int)
     ]
     if keep:
         models.UpstreamVersion.objects.bulk_create(
-            keep, update_conflicts=True, unique_fields=["source", "upstream_pk"], update_fields=["script_id", "row"]
+            keep, update_conflicts=True, unique_fields=["upstream_pk"], update_fields=["script_id", "row"]
         )
 
 
-def _linked_by_upstream_id(source):
-    return {script.upstream_id: script for script in linked_scripts().filter(upstream_source=source)}
+def _linked_by_upstream_id():
+    return {script.upstream_id: script for script in linked_scripts()}
 
 
-def cursor_for(source):
-    """The newest version id seen at ``source`` by the last sync, or None before the first."""
-    return models.UpstreamCursor.objects.filter(source=source).values_list("last_version_pk", flat=True).first()
+def cursor_for():
+    """The newest version id the last sync saw on botcscripts.com, or None before the first."""
+    return models.UpstreamCursor.objects.order_by("pk").values_list("last_version_pk", flat=True).first()
 
 
-def _advance_cursor(source, pk):
-    models.UpstreamCursor.objects.update_or_create(source=source, defaults={"last_version_pk": pk})
+def _advance_cursor(pk):
+    # update() does not touch auto_now fields, so updated is set by hand.
+    if not models.UpstreamCursor.objects.update(last_version_pk=pk, updated=timezone.now()):
+        models.UpstreamCursor.objects.create(last_version_pk=pk)
 
 
-def _mark_checked(source):
-    linked_scripts().filter(upstream_source=source).update(last_synced=timezone.now())
+def _mark_checked():
+    linked_scripts().update(last_synced=timezone.now())
 
 
 def linked_scripts():
-    return models.Script.objects.filter(
-        sync_enabled=True,
-        upstream_id__isnull=False,
-        upstream_source__isnull=False,
-    ).order_by("pk")
-
-
-def linked_sources():
-    """Every instance at least one script here is linked to, normalised."""
-    return sorted({normalise_source(source) for source in linked_scripts().values_list("upstream_source", flat=True)})
+    """Scripts that sync follows: linked to a script on botcscripts.com, with sync on."""
+    return models.Script.objects.filter(sync_enabled=True, upstream_id__isnull=False, upstream_source=SOURCE).order_by(
+        "pk"
+    )

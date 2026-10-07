@@ -1,10 +1,10 @@
-"""Pull new versions for every script linked to an upstream instance.
+"""Pull new versions of linked scripts from botcscripts.com, and keep its rows for imports.
 
-Safe to run on a timer: it only ever adds versions upstream has and this instance does
-not. Each source is read once, through its list of versions newest first, down to the
+Safe to run on a timer: it only ever adds versions botcscripts.com has and this instance
+does not. It reads botcscripts.com's list of versions once, newest first, down to the
 newest version seen on the last run: usually one request. Every row read is stored for
-imports to use, and every new version of a script linked here is added; the only other
-requests are their PDFs, once each. This is the approach the botcscripts.com maintainer
+imports to use, and every new version of a linked script is added; the only other
+requests are their PDFs, once each. This is the approach botcscripts.com's maintainer
 asked for, and once a day is the most it should run.
 
 `--script <id>` checks one script by itself instead, and `--full --script <id>` fetches
@@ -17,7 +17,7 @@ from scripts import models, notifications, upstream
 
 
 class Command(BaseCommand):
-    help = "Pull new versions for scripts linked to an upstream instance."
+    help = "Pull new versions of linked scripts from botcscripts.com."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -33,7 +33,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--dry-run",
             action="store_true",
-            help="Report what would be read, without asking the source anything or writing.",
+            help="Say how far botcscripts.com would be read, without asking it anything or writing.",
         )
 
     def handle(self, *args, **options):
@@ -42,51 +42,36 @@ class Command(BaseCommand):
         if options["script"]:
             return self.sync_one(options["script"], full=options["full"], dry_run=options["dry_run"])
 
-        sources = upstream.linked_sources()
-        if not sources:
-            self.stdout.write("No linked scripts. Import one with import_script first; linking is the default.")
+        if options["dry_run"]:
+            last_seen = upstream.cursor_for()
+            where = f"down to version {last_seen}" if last_seen is not None else "the newest page only"
+            self.stdout.write(f"would read {upstream.SOURCE}: {where}")
             return
 
-        # One Discord announcement for the whole run, covering every script that gained a
-        # version. Across a few dozen linked scripts, a message per script would be a burst
-        # of near-identical pings at the same moment.
-        added = failures = 0
-        with notifications.batched():
-            for source in sources:
-                if options["dry_run"]:
-                    last_seen = upstream.cursor_for(source)
-                    where = f"down to version {last_seen}" if last_seen is not None else "the newest page only"
-                    self.stdout.write(f"would read {source}: {where}")
-                    continue
-                try:
-                    result = upstream.sync_source(source)
-                except upstream.UpstreamError as exc:
-                    failures += 1
-                    self.stderr.write(self.style.ERROR(f"{source}: {exc}"))
-                    continue
+        # Read even with nothing linked yet: the rows it keeps are what imports are served from.
+        try:
+            result = upstream.sync_source()
+        except upstream.UpstreamError as exc:
+            raise CommandError(str(exc)) from exc
 
-                added += len(result.imported)
-                for version in result.imported:
-                    self.stdout.write(self.style.SUCCESS(f"new version: {version.script.name} {version.version}"))
-                for problem in result.failed:
-                    failures += 1
-                    self.stderr.write(self.style.ERROR(f"{source}: {problem}"))
-                self.stdout.write(f"read {result.pages} page(s) of {source}")
-                if result.first_run:
-                    self.stdout.write(
-                        f"first run for {source}: read its newest page only, and later runs carry on from "
-                        "there. Use --full --script <id> for anything older a linked script is missing."
-                    )
-                if result.limited:
-                    self.stderr.write(
-                        f"{source}: stopped after {upstream.MAX_PAGES} pages without reaching the last version "
-                        "seen, so anything older was not checked."
-                    )
-
-        if not options["dry_run"]:
-            self.stdout.write(f"done: {added} new version(s)")
-        if failures:
-            raise CommandError(f"{failures} problem(s) syncing; see above.")
+        for version in result.imported:
+            self.stdout.write(self.style.SUCCESS(f"new version: {version.script.name} {version.version}"))
+        for problem in result.failed:
+            self.stderr.write(self.style.ERROR(problem))
+        self.stdout.write(f"read {result.pages} page(s) of {upstream.SOURCE}")
+        if result.first_run:
+            self.stdout.write(
+                "first run: read the newest page only, and later runs carry on from there. "
+                "Use --full --script <id> for anything older a linked script is missing."
+            )
+        if result.limited:
+            self.stderr.write(
+                f"stopped after {upstream.MAX_PAGES} pages without reaching the last version seen, "
+                "so anything older was not checked."
+            )
+        self.stdout.write(f"done: {len(result.imported)} new version(s)")
+        if result.failed:
+            raise CommandError(f"{len(result.failed)} version(s) could not be added; see above.")
 
     def sync_one(self, pk, full, dry_run):
         script = models.Script.objects.filter(pk=pk).first()

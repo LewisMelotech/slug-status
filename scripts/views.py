@@ -1486,13 +1486,11 @@ def create_characters_and_determine_homebrew_status(script_content: dict, script
 
 class ScriptImportView(generic.FormView):
     """
-    Import a script from another instance through the site.
+    Import a script from botcscripts.com through the site.
 
     Open to whoever may upload, because importing a script someone else published is
-    the same act as uploading it by hand. What stays restricted is WHERE it may be
-    fetched from: the fetch runs on the server, so anyone without
-    scripts.api_write_permission is held to settings.IMPORT_SOURCES, checked against
-    the resolved source rather than the field, since a pasted link carries its own.
+    the same act as uploading it by hand. Where it is fetched from is not up to them:
+    only botcscripts.com, and the form refuses a link to anywhere else.
     """
 
     template_name = "import.html"
@@ -1505,23 +1503,11 @@ class ScriptImportView(generic.FormView):
             raise PermissionDenied("Uploads are currently disabled.")
         return super().post(request, *args, **kwargs)
 
-    def get_form_kwargs(self):
-        kwargs = super().get_form_kwargs()
-        kwargs["user"] = self.request.user
-        return kwargs
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["import_sources"] = upstream.allowed_sources()
-        context["unrestricted"] = context["form"].unrestricted
-        return context
-
     def form_valid(self, form):
         try:
             with notifications.attributed("Imported"):
                 script, imported, skipped = upstream.import_script(
                     form.cleaned_data["upstream_id"],
-                    source=form.cleaned_data["source"],
                     link=form.cleaned_data.get("link", False),
                     user=self.request.user,
                 )

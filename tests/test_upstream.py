@@ -2,7 +2,7 @@ import pytest
 from django.contrib.auth.models import AnonymousUser
 
 from scripts.upstream import (
-    DEFAULT_SOURCE,
+    SOURCE,
     Blocked,
     NotOwner,
     UpstreamClient,
@@ -11,7 +11,6 @@ from scripts.upstream import (
     _select_versions,
     _target_script,
     import_script,
-    normalise_source,
     parse_reference,
 )
 
@@ -37,37 +36,34 @@ class FakeSession:
 
 
 @pytest.mark.parametrize(
-    "value, expected",
-    [
-        ("https://www.botcscripts.com", "https://www.botcscripts.com"),
-        ("https://www.botcscripts.com/", "https://www.botcscripts.com"),
-        ("https://www.botcscripts.com/script/134", "https://www.botcscripts.com"),
-        ("www.botcscripts.com", "https://www.botcscripts.com"),
-        ("http://botc-scripts:8000", "http://botc-scripts:8000"),
-    ],
-)
-def test_normalise_source(value, expected):
-    assert normalise_source(value) == expected
-
-
-@pytest.mark.parametrize("value", ["", "   ", "not a url"])
-def test_normalise_source_rejects_rubbish(value):
-    with pytest.raises(UpstreamError):
-        normalise_source(value)
-
-
-@pytest.mark.parametrize(
     "reference, expected",
     [
-        ("134", (DEFAULT_SOURCE, 134)),
-        ("  134  ", (DEFAULT_SOURCE, 134)),
-        ("https://www.botcscripts.com/script/134", ("https://www.botcscripts.com", 134)),
-        ("https://www.botcscripts.com/script/134/1.0.0", ("https://www.botcscripts.com", 134)),
-        ("http://botc-scripts:8000/script/7", ("http://botc-scripts:8000", 7)),
+        ("134", 134),
+        ("  134  ", 134),
+        ("/script/134", 134),
+        ("https://www.botcscripts.com/script/134", 134),
+        ("https://www.botcscripts.com/script/134/1.0.0", 134),
+        ("http://botcscripts.com/script/134", 134),
+        ("www.botcscripts.com/script/134", 134),
+        ("https://WWW.BotcScripts.com/script/134", 134),
     ],
 )
 def test_parse_reference(reference, expected):
     assert parse_reference(reference) == expected
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "http://botc-scripts:8000/script/7",
+        "https://botcscripts.com.example/script/7",
+        # The cloud metadata endpoint stands in for anything on the server's own network.
+        "http://169.254.169.254/script/1",
+    ],
+)
+def test_parse_reference_refuses_anywhere_but_botcscripts_com(reference):
+    with pytest.raises(UpstreamError, match="only be imported from botcscripts.com"):
+        parse_reference(reference)
 
 
 @pytest.mark.parametrize("reference", ["", "nonsense", "https://www.botcscripts.com/script/"])
@@ -183,25 +179,23 @@ def test_a_version_number_this_instance_cannot_store_is_an_upstream_error():
         _select_versions({"v2 beta": "u"}, [])
 
 
-def test_import_serializer_resolves_a_bare_id_against_the_default_source():
+def test_import_serializer_resolves_a_bare_id():
     from scripts.serializers import ScriptImportSerializer
 
     serializer = ScriptImportSerializer(data={"reference": "134"})
     assert serializer.is_valid(), serializer.errors
     assert serializer.validated_data["upstream_id"] == 134
-    assert serializer.validated_data["source"] == DEFAULT_SOURCE
     # Linking is the default: an import you have to opt into following would leave
     # sync_upstream silently doing nothing.
     assert serializer.validated_data["link"] is True
 
 
-def test_import_serializer_takes_the_source_from_a_url_reference():
+def test_import_serializer_refuses_a_link_to_another_instance():
     from scripts.serializers import ScriptImportSerializer
 
     serializer = ScriptImportSerializer(data={"reference": "http://botc-scripts:8000/script/7"})
-    assert serializer.is_valid(), serializer.errors
-    assert serializer.validated_data["source"] == "http://botc-scripts:8000"
-    assert serializer.validated_data["upstream_id"] == 7
+    assert not serializer.is_valid()
+    assert "only be imported from botcscripts.com" in str(serializer.errors["reference"])
 
 
 @pytest.mark.parametrize("reference", ["nonsense", "", "https://www.botcscripts.com/script/"])
@@ -219,20 +213,6 @@ def test_import_form_resolves_a_reference_and_defaults_to_linking():
     form = ScriptImportForm(data={"reference": "134", "link": "on"})
     assert form.is_valid(), form.errors
     assert form.cleaned_data["upstream_id"] == 134
-    assert form.cleaned_data["source"] == DEFAULT_SOURCE
-
-
-def test_import_form_takes_the_source_from_a_url():
-    from scripts.forms import ScriptImportForm
-
-    # A privileged user, because that host is not one of the listed instances: this
-    # is testing that a link's own host wins, not who is allowed to use it.
-    form = ScriptImportForm(
-        data={"reference": "http://botc-scripts:8000/script/7"},
-        user=StubUser("scripts.api_write_permission"),
-    )
-    assert form.is_valid(), form.errors
-    assert form.cleaned_data["source"] == "http://botc-scripts:8000"
 
 
 def test_import_form_reports_an_unusable_reference_against_that_field():
@@ -253,51 +233,19 @@ def test_import_is_a_reserved_slug():
         validate_script_slug("import")
 
 
-class StubUser:
-    """A user without touching the database."""
-
-    is_authenticated = True
-
-    def __init__(self, *permissions):
-        self.permissions = set(permissions)
-
-    def has_perm(self, permission):
-        return permission in self.permissions
-
-
-def test_ordinary_users_are_held_to_the_configured_sources():
-    from scripts.upstream import allowed_sources, may_import_from
-
-    allowed = allowed_sources()[0]
-    assert may_import_from(allowed, StubUser()) is True
-    # The cloud metadata endpoint stands in for anything on the server's own network.
-    assert may_import_from("http://169.254.169.254", StubUser()) is False
-    assert may_import_from("http://botc-scripts:8000", StubUser()) is False
-
-
-def test_the_write_permission_lifts_the_source_restriction():
-    from scripts.upstream import may_import_from
-
-    privileged = StubUser("scripts.api_write_permission")
-    assert may_import_from("http://169.254.169.254", privileged) is True
-    assert may_import_from("http://botc-scripts:8000", privileged) is True
-
-
-def test_the_form_refuses_an_unlisted_host_pasted_as_a_link():
+def test_the_form_refuses_a_link_to_another_instance():
     from scripts.forms import ScriptImportForm
 
-    # The check has to run on the resolved source: the dropdown is not the only way
-    # to choose an instance, because a pasted link carries its own.
-    form = ScriptImportForm(data={"reference": "http://169.254.169.254/script/1"}, user=StubUser())
+    # Whoever is asking: there is no permission that opens other instances up any more.
+    form = ScriptImportForm(data={"reference": "http://169.254.169.254/script/1"})
     assert not form.is_valid()
-    assert "can only be imported from" in str(form.errors)
+    assert "only be imported from botcscripts.com" in str(form.errors)
 
 
-def test_the_form_accepts_a_listed_host_for_an_ordinary_user():
+def test_the_form_accepts_a_link_to_botcscripts_com():
     from scripts.forms import ScriptImportForm
-    from scripts.upstream import allowed_sources
 
-    form = ScriptImportForm(data={"reference": f"{allowed_sources()[0]}/script/134"}, user=StubUser())
+    form = ScriptImportForm(data={"reference": f"{SOURCE}/script/134"})
     assert form.is_valid(), form.errors
     assert form.cleaned_data["upstream_id"] == 134
 
@@ -355,10 +303,10 @@ def test_not_owner_is_an_upstream_error_so_existing_handlers_report_it():
 def test_a_script_linked_to_this_source_is_open_to_anyone_who_can_import(monkeypatch, importer):
     # Found by its link, so its content is the source's own: importing again, or as
     # someone else, cannot change it into anything the source did not publish.
-    linked = held_script(owner_id=1, upstream_source=DEFAULT_SOURCE)
+    linked = held_script(owner_id=1, upstream_source=SOURCE)
     scripts_held(monkeypatch, linked=linked, by_name=None)
 
-    assert _target_script(DEFAULT_SOURCE, 134, "Sects and Violets", importer) == (linked, False)
+    assert _target_script(134, "Sects and Violets", importer) == (linked, False)
 
 
 @pytest.mark.parametrize("importer", [*ANONYMOUS_ONES, StubImporter(pk=2)])
@@ -366,14 +314,14 @@ def test_a_script_with_no_owner_stays_open_as_uploads_are(monkeypatch, importer)
     unowned = held_script(owner_id=None)
     scripts_held(monkeypatch, linked=None, by_name=unowned)
 
-    assert _target_script(DEFAULT_SOURCE, 134, "Sects and Violets", importer) == (unowned, False)
+    assert _target_script(134, "Sects and Violets", importer) == (unowned, False)
 
 
 def test_its_owner_may_import_into_a_script_found_by_name(monkeypatch):
     owned = held_script(owner_id=1)
     scripts_held(monkeypatch, linked=None, by_name=owned)
 
-    assert _target_script(DEFAULT_SOURCE, 134, "Sects and Violets", StubImporter(pk=1)) == (
+    assert _target_script(134, "Sects and Violets", StubImporter(pk=1)) == (
         owned,
         False,
     )
@@ -386,7 +334,7 @@ def test_nobody_else_may_import_into_an_owned_script_that_only_shares_its_name(m
     scripts_held(monkeypatch, linked=None, by_name=held_script(owner_id=1))
 
     with pytest.raises(NotOwner, match="only its owner or staff can import into it"):
-        _target_script(DEFAULT_SOURCE, 134, "Sects and Violets", importer)
+        _target_script(134, "Sects and Violets", importer)
 
 
 @pytest.mark.parametrize("flag", ["is_staff", "is_superuser"])
@@ -397,7 +345,7 @@ def test_staff_and_superusers_may_import_into_a_script_someone_else_owns(monkeyp
     importer = StubImporter(pk=2)
     setattr(importer, flag, True)
 
-    assert _target_script(DEFAULT_SOURCE, 134, "Sects and Violets", importer) == (owned, False)
+    assert _target_script(134, "Sects and Violets", importer) == (owned, False)
 
 
 def test_being_signed_in_is_not_the_same_as_being_staff(monkeypatch):
@@ -406,7 +354,7 @@ def test_being_signed_in_is_not_the_same_as_being_staff(monkeypatch):
     importer.is_staff = importer.is_superuser = False
 
     with pytest.raises(NotOwner):
-        _target_script(DEFAULT_SOURCE, 134, "Sects and Violets", importer)
+        _target_script(134, "Sects and Violets", importer)
 
 
 def test_a_trusted_caller_is_not_held_to_the_rule(monkeypatch):
@@ -414,7 +362,7 @@ def test_a_trusted_caller_is_not_held_to_the_rule(monkeypatch):
     owned = held_script(owner_id=1)
     scripts_held(monkeypatch, linked=None, by_name=owned)
 
-    assert _target_script(DEFAULT_SOURCE, 134, "Sects and Violets", None, enforce_owner=False) == (
+    assert _target_script(134, "Sects and Violets", None, enforce_owner=False) == (
         owned,
         False,
     )
@@ -423,7 +371,7 @@ def test_a_trusted_caller_is_not_held_to_the_rule(monkeypatch):
 def test_a_name_nothing_holds_becomes_a_new_script(monkeypatch):
     scripts_held(monkeypatch, linked=None, by_name=None)
 
-    script, is_new = _target_script(DEFAULT_SOURCE, 134, "Brand New", None)
+    script, is_new = _target_script(134, "Brand New", None)
 
     assert is_new is True
     assert script.name == "Brand New"
@@ -523,7 +471,7 @@ def test_the_import_page_imports_as_the_visitor(monkeypatch):
     view = views.ScriptImportView()
     view.request = RequestFactory().post("/script/import")
     view.request.user = StubImporter(pk=3)
-    form = SimpleNamespace(cleaned_data={"upstream_id": 134, "source": DEFAULT_SOURCE, "link": True})
+    form = SimpleNamespace(cleaned_data={"upstream_id": 134, "link": True})
 
     response = view.form_valid(form)
 
@@ -645,25 +593,23 @@ def held_here(monkeypatch):
     state = SimpleNamespace(versions=[], written=[], checked=0, stored={}, cursor=10**9, early_reads=0)
     state.on_early_read = lambda: None
 
-    def early_read(source, client=None):
+    def early_read(client=None):
         state.early_reads += 1
         state.on_early_read()
 
     monkeypatch.setattr(
-        upstream, "_stored_rows", lambda source, pks: {pk: state.stored[pk] for pk in pks if pk in state.stored}
+        upstream, "_stored_rows", lambda pks: {pk: state.stored[pk] for pk in pks if pk in state.stored}
     )
-    monkeypatch.setattr(
-        upstream, "_store_rows", lambda source, rows: state.stored.update({row["pk"]: row for row in rows})
-    )
-    monkeypatch.setattr(upstream, "cursor_for", lambda source: state.cursor)
+    monkeypatch.setattr(upstream, "_store_rows", lambda rows: state.stored.update({row["pk"]: row for row in rows}))
+    monkeypatch.setattr(upstream, "cursor_for", lambda: state.cursor)
     monkeypatch.setattr(upstream, "sync_source", early_read)
-    linked = held_script(upstream_source=DEFAULT_SOURCE)
+    linked = held_script(upstream_source=SOURCE)
     linked.upstream_id = 134
     state.script = linked
     scripts_held(monkeypatch, linked=linked, by_name=None)
     monkeypatch.setattr(upstream, "_held_versions", lambda script: state.versions)
 
-    def write(source, row, **kwargs):
+    def write(row, **kwargs):
         state.written.append(row["version"])
         return SimpleNamespace(version=row["version"], pdf=None)
 
@@ -831,36 +777,28 @@ def test_a_full_sync_is_one_script_at_a_time():
         call_command("sync_upstream", "--full")
 
 
-def test_sync_reads_each_source_once_and_carries_on_past_one_that_refuses(monkeypatch):
+def test_sync_reads_botcscripts_com_once_and_reports_a_refusal(monkeypatch):
     from io import StringIO
-    from types import SimpleNamespace
 
     from django.core.management import CommandError, call_command
 
     from scripts import upstream
 
-    other = "http://other.example"
     read = []
 
-    def sync_source(source):
-        read.append(source)
-        if source == DEFAULT_SOURCE:
-            raise Blocked("refused with HTTP 403")
-        return SimpleNamespace(imported=[], failed=[], pages=1, first_run=False, limited=False)
+    def sync_source():
+        read.append("read")
+        raise Blocked("refused with HTTP 403")
 
-    monkeypatch.setattr(upstream, "linked_sources", lambda: [DEFAULT_SOURCE, other])
     monkeypatch.setattr(upstream, "sync_source", sync_source)
-    err = StringIO()
 
-    with pytest.raises(CommandError, match="1 problem"):
-        call_command("sync_upstream", stdout=StringIO(), stderr=err)
+    with pytest.raises(CommandError, match="refused with HTTP 403"):
+        call_command("sync_upstream", stdout=StringIO(), stderr=StringIO())
 
-    # Once per source, not once per script, and a refusal from one source is not the other's.
-    assert read == [DEFAULT_SOURCE, other]
-    assert "refused with HTTP 403" in err.getvalue()
+    assert read == ["read"]
 
 
-def test_a_dry_run_asks_the_source_nothing(monkeypatch):
+def test_a_dry_run_asks_botcscripts_com_nothing(monkeypatch):
     from io import StringIO
 
     from django.core.management import call_command
@@ -868,16 +806,15 @@ def test_a_dry_run_asks_the_source_nothing(monkeypatch):
     from scripts import upstream
 
     def must_not_run(*args, **kwargs):
-        raise AssertionError("a dry run read the source")
+        raise AssertionError("a dry run read botcscripts.com")
 
-    monkeypatch.setattr(upstream, "linked_sources", lambda: [DEFAULT_SOURCE])
-    monkeypatch.setattr(upstream, "cursor_for", lambda source: 1234)
+    monkeypatch.setattr(upstream, "cursor_for", lambda: 1234)
     monkeypatch.setattr(upstream, "sync_source", must_not_run)
     out = StringIO()
 
     call_command("sync_upstream", "--dry-run", stdout=out)
 
-    assert f"would read {DEFAULT_SOURCE}: down to version 1234" in out.getvalue()
+    assert f"would read {SOURCE}: down to version 1234" in out.getvalue()
 
 
 def test_import_script_stops_at_the_first_refusal(monkeypatch):
@@ -903,7 +840,7 @@ def test_import_script_stops_at_the_first_refusal(monkeypatch):
     assert "not attempted: 2, 3" in err.getvalue()
 
 
-def test_the_admin_sync_action_reads_each_source_once_whatever_is_selected(monkeypatch):
+def _admin_with_sync(monkeypatch):
     from types import SimpleNamespace
 
     from django.contrib.admin.sites import AdminSite
@@ -911,36 +848,45 @@ def test_the_admin_sync_action_reads_each_source_once_whatever_is_selected(monke
     from scripts import models, upstream
     from scripts.admin import ScriptAdmin
 
-    read, said = [], []
+    state = SimpleNamespace(reads=0, said=[])
 
-    def sync_source(source):
-        read.append(source)
+    def sync_source():
+        state.reads += 1
         return SimpleNamespace(imported=[], failed=[])
 
     monkeypatch.setattr(upstream, "sync_source", sync_source)
     model_admin = ScriptAdmin(models.Script, AdminSite())
-    monkeypatch.setattr(model_admin, "message_user", lambda request, message, *args, **kwargs: said.append(message))
+    monkeypatch.setattr(
+        model_admin, "message_user", lambda request, message, *args, **kwargs: state.said.append(message)
+    )
+    return model_admin, state
 
-    def selected(name, source, sync_enabled=True):
-        return SimpleNamespace(name=name, upstream_source=source, upstream_id=1, sync_enabled=sync_enabled)
 
-    other = "http://other.example"
+def _selected(sync_enabled=True, upstream_source=SOURCE, upstream_id=1):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(sync_enabled=sync_enabled, upstream_source=upstream_source, upstream_id=upstream_id)
+
+
+def test_the_admin_sync_action_reads_botcscripts_com_once_whatever_is_selected(monkeypatch):
+    model_admin, state = _admin_with_sync(monkeypatch)
+
+    model_admin.sync_now(None, [_selected(), _selected(), _selected(sync_enabled=False)])
+
+    assert state.reads == 1
+    assert state.said == ["Every linked script is up to date."]
+
+
+def test_the_admin_sync_action_does_nothing_for_a_selection_with_nothing_linked(monkeypatch):
+    model_admin, state = _admin_with_sync(monkeypatch)
+
     model_admin.sync_now(
         None,
-        [
-            selected("A", DEFAULT_SOURCE),
-            selected("B", DEFAULT_SOURCE),
-            selected("C", other),
-            selected("D", "http://not-followed.example", sync_enabled=False),
-        ],
+        [_selected(sync_enabled=False), _selected(upstream_id=None), _selected(upstream_source="http://other.example")],
     )
 
-    # Sorted, so in a stable order: "http://other" sorts before "https://www".
-    assert read == [other, DEFAULT_SOURCE]
-    assert said == [
-        f"{other}: every linked script is up to date.",
-        f"{DEFAULT_SOURCE}: every linked script is up to date.",
-    ]
+    assert state.reads == 0
+    assert state.said == ["None of the selected scripts is linked with sync on."]
 
 
 # --- The scheduled sync: one read of the newest versions, down to the last one seen -------
@@ -964,7 +910,7 @@ def test_the_newest_versions_are_asked_for_newest_first_every_one_of_them():
     UpstreamClient(session=session).newest_versions(2)
 
     (url,) = session.requested
-    assert url.startswith(f"{DEFAULT_SOURCE}/api/scripts/?")
+    assert url.startswith(f"{SOURCE}/api/scripts/?")
     for part in ("ordering=-pk", "all_scripts=true", "include_hybrid=true", "include_homebrew=true", "page=2"):
         assert part in url
 
@@ -1004,23 +950,23 @@ def feed(monkeypatch):
         state.linked[upstream_id] = SimpleNamespace(name=f"Script {upstream_id}", upstream_id=upstream_id)
         state.held[upstream_id] = list(held)
 
-    def write(source, row, **kwargs):
+    def write(row, **kwargs):
         state.written.append((row["script_id"], row["version"]))
         return SimpleNamespace(version=row["version"], script=state.linked[row["script_id"]])
 
-    def advance(source, pk):
+    def advance(pk):
         state.cursor = pk
 
-    def check(source):
+    def check():
         state.checked += 1
 
     state.link = link
-    monkeypatch.setattr(upstream, "_linked_by_upstream_id", lambda source: state.linked)
+    monkeypatch.setattr(upstream, "_linked_by_upstream_id", lambda: state.linked)
     monkeypatch.setattr(upstream, "_held_versions", lambda script: state.held[script.upstream_id])
-    monkeypatch.setattr(upstream, "cursor_for", lambda source: state.cursor)
+    monkeypatch.setattr(upstream, "cursor_for", lambda: state.cursor)
     monkeypatch.setattr(upstream, "_advance_cursor", advance)
     monkeypatch.setattr(upstream, "_mark_checked", check)
-    monkeypatch.setattr(upstream, "_store_rows", lambda source, rows: state.stored.extend(row["pk"] for row in rows))
+    monkeypatch.setattr(upstream, "_store_rows", lambda rows: state.stored.extend(row["pk"] for row in rows))
     monkeypatch.setattr(upstream, "import_version", write)
     return state
 
@@ -1035,7 +981,7 @@ def test_sync_reads_down_to_the_last_version_seen_and_no_further(feed):
         [(104, 7, "1.0.0")],
     )
 
-    result = sync_source(DEFAULT_SOURCE, client=client)
+    result = sync_source(client=client)
 
     assert client.asked == ["page 1", "page 2"]
     assert result.pages == 2
@@ -1050,7 +996,7 @@ def test_a_sync_with_nothing_new_costs_one_request(feed):
     feed.link(1, "1.0.0")
     client = FeedClient([(110, 1, "1.0.0"), (109, 2, "1.0.0")], [(108, 3, "1.0.0")])
 
-    result = sync_source(DEFAULT_SOURCE, client=client)
+    result = sync_source(client=client)
 
     assert client.asked == ["page 1"]
     assert result.imported == []
@@ -1065,7 +1011,7 @@ def test_every_new_version_of_a_linked_script_is_added_oldest_first_with_its_pdf
     feed.link(3, "2.0.0")  # already holds what was published
     client = FeedClient([(110, 1, "1.0.0"), (109, 2, "1.2.0"), (108, 3, "2.0.0"), (107, 2, "1.1.0"), (100, 5, "1.0.0")])
 
-    result = sync_source(DEFAULT_SOURCE, client=client)
+    result = sync_source(client=client)
 
     # Both new versions, so the newer takes the latest flag; one PDF each, once. Script 1 is
     # not linked here and costs nothing beyond the page it was on.
@@ -1080,7 +1026,7 @@ def test_every_row_read_is_stored_for_imports_linked_or_not(feed):
     feed.cursor = 107
     client = FeedClient([(110, 1, "1.0.0"), (109, 2, "1.0.0"), (108, 3, "1.0.0"), (107, 4, "1.0.0")])
 
-    sync_source(DEFAULT_SOURCE, client=client)
+    sync_source(client=client)
 
     # Not 107: that one was stored by the run that saw it first.
     assert sorted(feed.stored) == [108, 109, 110]
@@ -1091,7 +1037,7 @@ def test_the_first_sync_reads_one_page_and_starts_from_there(feed):
 
     client = FeedClient([(110, 1, "1.0.0"), (108, 2, "1.0.0")], [(107, 3, "1.0.0")])
 
-    result = sync_source(DEFAULT_SOURCE, client=client)
+    result = sync_source(client=client)
 
     assert client.asked == ["page 1"]
     assert result.first_run is True
@@ -1105,7 +1051,7 @@ def test_the_cursor_stays_put_when_the_source_refuses_partway(feed):
     client = FeedClient([(110, 1, "1.0.0")], [(105, 2, "1.0.0")], refuse_page=2)
 
     with pytest.raises(Blocked):
-        sync_source(DEFAULT_SOURCE, client=client)
+        sync_source(client=client)
 
     # The next run starts from the same place rather than skipping what was not read.
     assert feed.cursor == 100
@@ -1119,7 +1065,7 @@ def test_a_sync_stops_at_the_page_limit_and_says_so(feed, monkeypatch):
     feed.cursor = 1
     client = FeedClient([(30, 1, "1.0.0")], [(20, 2, "1.0.0")], [(10, 3, "1.0.0")])
 
-    result = upstream.sync_source(DEFAULT_SOURCE, client=client)
+    result = upstream.sync_source(client=client)
 
     assert client.asked == ["page 1", "page 2"]
     assert result.limited is True
@@ -1134,7 +1080,7 @@ def test_a_version_that_cannot_be_imported_is_reported_and_the_rest_carry_on(fee
     feed.link(3, "1.0.0")
     client = FeedClient([(110, 2, "v2 beta"), (109, 3, "1.1.0")])
 
-    result = sync_source(DEFAULT_SOURCE, client=client)
+    result = sync_source(client=client)
 
     assert feed.written == [(3, "1.1.0")]
     assert len(result.failed) == 1 and "v2 beta" in result.failed[0]

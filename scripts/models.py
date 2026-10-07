@@ -181,44 +181,37 @@ class Script(models.Model):
 
 
 class UpstreamCursor(models.Model):
-    """How far sync_upstream has read a source's list of its newest versions.
+    """How far sync_upstream has read botcscripts.com's list of its newest versions.
 
-    Version ids only ever increase there, so the newest one seen is all that is needed to
-    know where the next run can stop reading. Lower it to have the next run look further
-    back, at the cost of a request per extra page.
+    One row, created by the first sync. Version ids only ever increase there, so the newest
+    one seen is all that is needed to know where the next run can stop reading. Lower it to
+    have the next run look further back, at the cost of a request per extra page.
     """
 
-    source = models.URLField(unique=True, help_text="Base URL of the instance, e.g. https://www.botcscripts.com")
     last_version_pk = models.IntegerField(
-        help_text="The newest version id seen there, in that instance's numbering, not this one's."
+        help_text="The newest version id seen on botcscripts.com, in its numbering, not this site's."
     )
     updated = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.source} up to version {self.last_version_pk}"
+        return f"botcscripts.com up to version {self.last_version_pk}"
 
 
 class UpstreamVersion(models.Model):
-    """A version as another instance's API returned it, kept so imports can be served from it.
+    """A version as botcscripts.com's API returned it, kept so imports can be served from it.
 
-    Filled by sync's daily read of that instance's newest versions, which sees every version
-    of every script published there, and by any single lookup an import makes. ``row`` is
-    the API's own JSON for the version, content and all, so an import builds from it exactly
-    as it would from a fresh request.
+    Filled by sync's daily read of the newest versions there, which sees every version of
+    every script published, and by any single lookup an import makes. ``row`` is the API's
+    own JSON for the version, content and all, so an import builds from it exactly as it
+    would from a fresh request.
     """
 
-    source = models.URLField()
-    upstream_pk = models.IntegerField(help_text="The version's id there, unrelated to any id here.")
-    script_id = models.IntegerField(help_text="Its script's id there.")
+    upstream_pk = models.IntegerField(unique=True, help_text="The version's id on botcscripts.com.")
+    script_id = models.IntegerField(help_text="Its script's id on botcscripts.com.")
     row = models.JSONField()
 
     def __str__(self):
-        return f"{self.source} version {self.upstream_pk}"
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(fields=["source", "upstream_pk"], name="unique_upstream_version"),
-        ]
+        return f"botcscripts.com version {self.upstream_pk}"
 
 
 class ScriptVersion(models.Model):

@@ -254,60 +254,25 @@ class UpdateDatabaseForm(forms.Form):
 class ScriptImportForm(forms.Form):
     reference = forms.CharField(
         label="Script id or link",
-        help_text="A script id, or a link to its page, e.g. https://www.botcscripts.com/script/134",
+        help_text="A script's id on botcscripts.com, or a link to its page there, e.g. https://www.botcscripts.com/script/134",
         widget=forms.TextInput(attrs={"placeholder": "134 or https://www.botcscripts.com/script/134"}),
-    )
-    source = forms.CharField(
-        label="Instance to import from",
-        required=False,
-        help_text=f"Leave blank for {upstream.DEFAULT_SOURCE}. Only used when an id is given without a link.",
     )
     link = forms.BooleanField(
         label="Keep it linked",
         required=False,
         initial=True,
-        help_text="Pull new versions from the source whenever sync_upstream runs.",
+        help_text="Pull new versions from botcscripts.com whenever sync_upstream runs.",
     )
-
-    def __init__(self, *args, user=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.user = user
-        self.unrestricted = upstream.may_import_from(upstream.DEFAULT_SOURCE, user) and bool(
-            user and getattr(user, "is_authenticated", False) and user.has_perm("scripts.api_write_permission")
-        )
-        if self.unrestricted:
-            return
-
-        # Ordinary uploaders pick from the instances this site has nominated rather
-        # than naming one, so the server can only ever be pointed somewhere known.
-        allowed = upstream.allowed_sources()
-        if len(allowed) == 1:
-            del self.fields["source"]
-        else:
-            self.fields["source"] = forms.ChoiceField(
-                label="Instance to import from",
-                choices=[(source, source) for source in allowed],
-                required=False,
-                help_text="Only used when an id is given without a link.",
-            )
 
     def clean(self):
         cleaned = super().clean()
         reference = cleaned.get("reference")
         if not reference:
             return cleaned
-        source = cleaned.get("source") or upstream.allowed_sources()[0]
+        # A link to anywhere but botcscripts.com is refused here, so the server never
+        # fetches from a host a visitor chose.
         try:
-            cleaned["source"], cleaned["upstream_id"] = upstream.parse_reference(reference, source)
+            cleaned["upstream_id"] = upstream.parse_reference(reference)
         except upstream.UpstreamError as exc:
             raise ValidationError({"reference": str(exc)}) from exc
-
-        # Check the RESOLVED source, not the field: a pasted link carries its own
-        # instance, so validating only the dropdown would let any host in through the
-        # reference box.
-        if not upstream.may_import_from(cleaned["source"], self.user):
-            allowed = ", ".join(upstream.allowed_sources())
-            raise ValidationError(
-                {"reference": f"Scripts can only be imported from {allowed}, not {cleaned['source']}."}
-            )
         return cleaned

@@ -1,10 +1,14 @@
-# Importing scripts from another instance
+# Importing scripts from botcscripts.com
 
-This fork can copy scripts in from another botc-scripts instance — normally the public
-site at <https://www.botcscripts.com> — and optionally keep following them, pulling new
-versions as the author publishes them.
+This fork can copy scripts in from the official site, <https://www.botcscripts.com>, and
+optionally keep following them, pulling new versions as the author publishes them.
 
-Only the public read endpoints are used, so **no credentials are needed on the far side**.
+**Only botcscripts.com is imported from.** Its maintainer has said how its API may be used
+([discussion #740](https://github.com/AdmiralGT/botc-scripts/discussions/740)), and import
+and sync are built to that. Other instances, including other copies of this fork, used to
+be supported and no longer are. A link to anywhere else is refused.
+
+Only the public read endpoints are used, so **no credentials are needed there**.
 A fresh self-hosted instance starts with no scripts at all, so this is usually the first
 thing you want after bringing the stack up.
 
@@ -15,13 +19,7 @@ docker compose exec botc-scripts python manage.py import_script 134
 docker compose exec botc-scripts python manage.py import_script https://www.botcscripts.com/script/134
 ```
 
-Both forms are equivalent: a bare id is looked up on `--source` (the public site by
-default), and a URL carries its own instance, so you can import from any instance
-including another copy of this one:
-
-```sh
-python manage.py import_script 7 --source http://botc-scripts:8000
-```
+Both forms are equivalent. A link has to be to botcscripts.com, with or without `www.`.
 
 What comes across: the script name, author, version, script type, the JSON content, and
 the PDF when upstream has one. Character counts, edition and homebrew status are
@@ -160,23 +158,13 @@ ownership rule an upload has, described under
 and the upload switch: while `UPLOAD_DISABLED` is set, only staff may import, here or
 through the API. `sync_upstream` is not affected, since it runs as the administrator.
 
-What is restricted is **where** it may be fetched from. The fetch runs on the server, not
-in the visitor's browser, so an unrestricted form would let anyone aim your server at any
-address it can reach — including services on your own network that are not exposed to the
-internet. So:
-
-- Anyone may import from the instances listed in `IMPORT_SOURCES`, which defaults to
-  `https://www.botcscripts.com`. Set it to a comma-separated list to allow more.
-- Holders of `scripts.api_write_permission` are not restricted, and get a free-text
-  source field. Your bot's API account already holds it; grant it to a person in the
-  admin under their user's permissions.
-
-The check runs against the **resolved** source rather than the dropdown, because a pasted
-link carries its own instance — validating only the field would let any host in through
-the reference box.
+Where it fetches from is not up to the visitor: always botcscripts.com, and a pasted link
+to anywhere else is refused. The fetch runs on this server, so letting a visitor choose
+would let them aim it at any address it can reach, including services on your own network.
 
 There is no rate limiting on the form. On an instance open to the public internet, that
-means anyone can make your server fetch from an allowed source repeatedly; put it behind
+means anyone can make your server ask botcscripts.com for scripts repeatedly, and it is
+botcscripts.com that blocks an instance for asking too much. Put the form behind
 authentication or a proxy rate limit if that matters to you.
 
 ## Over the API
@@ -194,9 +182,11 @@ curl -u botuser:botpass -X POST https://your-instance/api/script_ids/import/ \
 
 | Field | Default | Meaning |
 |---|---|---|
-| `reference` | required | Script id, or a link to a script page |
-| `source` | the public site | Instance to import from, when `reference` is a bare id |
+| `reference` | required | Script id on botcscripts.com, or a link to its page there |
 | `link` | `true` | Follow this script in `sync_upstream` |
+
+A link to anywhere else is a `400`. A `source` field, which earlier versions of this fork
+accepted, is now ignored.
 
 Every import takes the full history of versions not already held here. An `all_versions`
 field, which earlier versions of this fork accepted, is now ignored.
@@ -256,10 +246,14 @@ never needs the command line for this.
 ## In the admin
 
 Linked scripts show their upstream id, sync state and last sync time in the script list,
-where `sync_enabled` is editable inline. The **Check the upstream instance of the selected
-scripts for new versions** action runs the same single read as the scheduled sync, once per
-instance in the selection, so it brings every script linked to that instance up to date,
-not only the ones selected. **Upstream cursors** shows how far each instance has been read.
+where `sync_enabled` is editable inline. The **Check botcscripts.com for new versions of
+linked scripts** action runs the same single read as the scheduled sync, so it brings every
+linked script up to date, not only the ones selected.
+
+**Upstream cursors** shows how far sync has read botcscripts.com, and is editable: lower it
+to have the next run look further back. **Upstream versions** lists every version stored for
+imports, newest first, searchable by its script id or version id on botcscripts.com. It is
+read-only, since imports are built from those rows exactly as botcscripts.com sent them.
 
 ## What is stored
 
@@ -267,7 +261,7 @@ Four fields on `Script`:
 
 | Field | Meaning |
 |---|---|
-| `upstream_source` | Base URL of the instance it came from |
+| `upstream_source` | `https://www.botcscripts.com` for anything imported. Only scripts with it are synced |
 | `upstream_id` | The script id **there**, unrelated to the id here |
 | `sync_enabled` | Whether `sync_upstream` follows it |
 | `last_synced` | When it was last checked |
@@ -275,12 +269,12 @@ Four fields on `Script`:
 A unique constraint on `(upstream_source, upstream_id)` means a repeated import updates
 the script it already created rather than forking a second copy.
 
-One `UpstreamCursor` row per instance synced from: `last_version_pk`, the newest version
-id seen there by the last sync, in that instance's numbering. It is created by the first
-sync, and sync reads down to it next time.
+One `UpstreamCursor` row: `last_version_pk`, the newest version id the last sync saw on
+botcscripts.com, in its numbering. It is created by the first sync, and sync reads down to
+it next time.
 
 And an `UpstreamVersion` row for every version the daily sync has read, or an import has
-looked up: the instance, the version's id and its script's id there, and the API's row for
+looked up: the version's id and its script's id on botcscripts.com, and the API's row for
 it, content and all. Imports are served from these. They are only ever added to or
 replaced, never removed, and start empty: the store holds what has been published since
 the first sync, plus whatever imports have looked up.
@@ -300,6 +294,6 @@ the first sync, plus whatever imports have looked up.
 - **The public site blocks instances that ask too much.** Keep sync to once a day,
   and see [When the source refuses](#staying-linked) for what happens once it does.
 - **Nothing is pushed back.** This is a one-way copy: votes, comments and edits made here
-  never reach the source instance.
+  never reach botcscripts.com.
 - A script created by an import has **no owner**, so anyone who can upload can add versions
   to it. Set an owner in the admin if that matters to you, and the rule below then applies.

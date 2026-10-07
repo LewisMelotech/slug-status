@@ -211,16 +211,6 @@ SOCIAL_SIGNUP_ENABLED = os.getenv("SOCIAL_SIGNUP_ENABLED", "True") == "True"
 ACCOUNT_EMAIL_VERIFICATION = os.getenv("ACCOUNT_EMAIL_VERIFICATION", "none")
 EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
 
-# Instances that anyone allowed to upload may also import from. Holders of
-# scripts.api_write_permission are not held to this list; everybody else is, because
-# importing makes THIS server fetch a URL the visitor supplied, so an unrestricted
-# form open to all would be a way to aim it at anything the server can reach.
-IMPORT_SOURCES = [
-    source.strip()
-    for source in os.getenv("IMPORT_SOURCES", "https://www.botcscripts.com").split(",")
-    if source.strip()
-]
-
 # Arrivals: announcing new scripts and new versions to a Discord channel, through an
 # incoming webhook. Blank switches arrivals off, which is the default. Treat the URL as a
 # secret — anyone holding it can post to that channel.

@@ -31,7 +31,7 @@ class ScriptAdmin(admin.ModelAdmin):
     list_display = ["pk", "name", "slug", "owner", "upstream_id", "sync_enabled", "last_synced"]
     list_display_links = ["pk", "name"]
     list_editable = ["slug", "sync_enabled"]
-    list_filter = ["sync_enabled", "upstream_source"]
+    list_filter = ["sync_enabled"]
     search_fields = ["name", "slug"]
     prepopulated_fields = {"slug": ("name",)}
     readonly_fields = ["last_synced"]
@@ -43,42 +43,69 @@ class ScriptAdmin(admin.ModelAdmin):
         kwargs.setdefault("form", ScriptAdminForm)
         return super().get_changelist_form(request, **kwargs)
 
-    @admin.action(description="Check the upstream instance of the selected scripts for new versions")
+    @admin.action(description="Check botcscripts.com for new versions of linked scripts")
     def sync_now(self, request, queryset):
-        # One read of each source's newest versions, as the scheduled sync does, rather than a
-        # lookup per selected script: botcscripts.com blocks instances that iterate its API.
-        # That read covers every script linked to the source, not only the selection.
-        sources = sorted(
-            {
-                upstream.normalise_source(script.upstream_source)
-                for script in queryset
-                if script.upstream_source and script.upstream_id and script.sync_enabled
-            }
-        )
-        if not sources:
-            self.message_user(request, "None of the selected scripts has sync enabled.", level=messages.WARNING)
+        # The same single read of botcscripts.com's newest versions as the scheduled sync,
+        # rather than a lookup per selected script: it blocks instances that iterate its API.
+        # That read covers every linked script, not only the selection.
+        if not any(
+            script.sync_enabled and script.upstream_id and script.upstream_source == upstream.SOURCE
+            for script in queryset
+        ):
+            self.message_user(request, "None of the selected scripts is linked with sync on.", level=messages.WARNING)
             return
-        for source in sources:
-            try:
-                result = upstream.sync_source(source)
-            except upstream.UpstreamError as exc:
-                self.message_user(request, f"{source}: {exc}", level=messages.ERROR)
-                continue
-            for problem in result.failed:
-                self.message_user(request, f"{source}: {problem}", level=messages.ERROR)
-            if result.imported:
-                names = ", ".join(f"{version.script.name} {version.version}" for version in result.imported)
-                self.message_user(request, f"{source}: imported {names}", level=messages.SUCCESS)
-            else:
-                self.message_user(request, f"{source}: every linked script is up to date.", level=messages.INFO)
+        try:
+            result = upstream.sync_source()
+        except upstream.UpstreamError as exc:
+            self.message_user(request, str(exc), level=messages.ERROR)
+            return
+        for problem in result.failed:
+            self.message_user(request, problem, level=messages.ERROR)
+        if result.imported:
+            names = ", ".join(f"{version.script.name} {version.version}" for version in result.imported)
+            self.message_user(request, f"Imported {names}.", level=messages.SUCCESS)
+        else:
+            self.message_user(request, "Every linked script is up to date.", level=messages.INFO)
 
 
 @admin.register(models.UpstreamCursor)
 class UpstreamCursorAdmin(admin.ModelAdmin):
-    """How far sync has read each source. Lower last_version_pk to make the next run look further back."""
+    """How far sync has read botcscripts.com. Lower last_version_pk to make the next run look further back."""
 
-    list_display = ["source", "last_version_pk", "updated"]
+    list_display = ["last_version_pk", "updated"]
     readonly_fields = ["updated"]
+
+
+@admin.register(models.UpstreamVersion)
+class UpstreamVersionAdmin(admin.ModelAdmin):
+    """The versions sync and imports have kept from botcscripts.com, to look at, not edit.
+
+    Each holds the API's own row for the version, and imports are built from it, so it is
+    left exactly as botcscripts.com sent it.
+    """
+
+    list_display = ["upstream_pk", "script_id", "name", "version"]
+    ordering = ["-upstream_pk"]
+    # Exact matches on ids there; the admin compares integer fields as text for this.
+    search_fields = ["script_id__exact", "upstream_pk__exact"]
+    search_help_text = "A script id or version id on botcscripts.com."
+
+    @admin.display(description="Name")
+    def name(self, obj):
+        return obj.row.get("name")
+
+    @admin.display(description="Version")
+    def version(self, obj):
+        return obj.row.get("version")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.action(description="Mark selected versions as live on the Minecraft server")

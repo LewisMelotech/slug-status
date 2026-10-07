@@ -1,4 +1,4 @@
-"""Import a script from another botc-scripts instance: every version, PDFs and all."""
+"""Import a script from botcscripts.com: every version, PDFs and all."""
 
 from django.core.management.base import BaseCommand, CommandError
 
@@ -6,18 +6,13 @@ from scripts import notifications, upstream
 
 
 class Command(BaseCommand):
-    help = "Import a script from another botc-scripts instance by id or URL."
+    help = "Import a script from botcscripts.com by id or link."
 
     def add_arguments(self, parser):
         parser.add_argument(
             "reference",
             nargs="+",
             help="Script id or URL, e.g. 134 or https://www.botcscripts.com/script/134",
-        )
-        parser.add_argument(
-            "--source",
-            default=upstream.DEFAULT_SOURCE,
-            help=f"Instance to import from when a bare id is given. Default {upstream.DEFAULT_SOURCE}.",
         )
         parser.add_argument(
             "--no-link",
@@ -32,7 +27,6 @@ class Command(BaseCommand):
                 with notifications.attributed("Imported", user=None, origin="the command line"):
                     script, imported, skipped = upstream.import_script(
                         reference,
-                        source=options["source"],
                         link=not options["no_link"],
                         # Run from a shell by whoever administers the instance, not by a visitor.
                         enforce_owner=False,
