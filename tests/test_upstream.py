@@ -671,8 +671,7 @@ def test_checking_one_script_fetches_a_newer_latest_version(held_here):
 
     sync_script(held_here.script, client=client)
 
-    # No PDF: sync of any kind leaves those to the first import.
-    assert client.asked == ["script", "version 1.2.0"]
+    assert client.asked == ["script", "version 1.2.0", "pdf 1.2.0"]
     assert held_here.written == ["1.2.0"]
 
 
@@ -685,7 +684,7 @@ def test_checking_one_script_takes_only_the_latest_of_several_new_versions(held_
     sync_script(held_here.script, client=client)
 
     # Three requests however many versions came out since the last run.
-    assert client.asked == ["script", "version 1.3.0"]
+    assert client.asked == ["script", "version 1.3.0", "pdf 1.3.0"]
     assert held_here.written == ["1.3.0"]
 
 
@@ -707,12 +706,12 @@ def test_checking_one_script_leaves_gaps_and_a_full_sync_fills_them(held_here):
 
     routine = ServingClient("1.0.0", "1.5.0", "2.0.0", "2.1.0", "2.2.0")
     sync_script(held_here.script, client=routine)
-    assert routine.asked == ["script", "version 2.2.0"]
+    assert routine.asked == ["script", "version 2.2.0", "pdf 2.2.0"]
 
     held_here.versions.append("2.2.0")
     full = ServingClient("1.0.0", "1.5.0", "2.0.0", "2.1.0", "2.2.0")
     sync_script(held_here.script, client=full, full=True)
-    assert full.asked == ["script", "version 1.5.0", "version 2.1.0"]
+    assert full.asked == ["script", "version 1.5.0", "pdf 1.5.0", "version 2.1.0", "pdf 2.1.0"]
 
 
 def test_a_first_import_takes_the_whole_history_oldest_first(held_here):
@@ -723,8 +722,6 @@ def test_a_first_import_takes_the_whole_history_oldest_first(held_here):
     assert held_here.written == ["1.0.0", "1.9.0", "1.10.0"]
     assert [version.version for version in imported] == held_here.written
     assert skipped == 0
-    # The first import is the one place PDFs come across.
-    assert [asked for asked in client.asked if asked.startswith("pdf")] == ["pdf 1.0.0", "pdf 1.9.0", "pdf 1.10.0"]
     assert len(client.asked) == 1 + 2 * 3
 
 
@@ -904,7 +901,7 @@ class FeedClient:
         return {"results": rows, "next": f"?page={page + 1}" if page < len(self.pages) else None}
 
     def pdf(self, script_id, version):
-        raise AssertionError("sync must not fetch a PDF")
+        self.asked.append(f"pdf {script_id} {version}")
 
 
 @pytest.fixture
@@ -972,7 +969,7 @@ def test_a_sync_with_nothing_new_costs_one_request(feed):
     assert feed.cursor == 110
 
 
-def test_only_new_versions_of_linked_scripts_are_imported_and_no_pdf_is_fetched(feed):
+def test_only_new_versions_of_linked_scripts_are_imported_and_only_they_cost_a_pdf(feed):
     from scripts.upstream import sync_source
 
     feed.cursor = 100
@@ -983,9 +980,8 @@ def test_only_new_versions_of_linked_scripts_are_imported_and_no_pdf_is_fetched(
 
     result = sync_source(DEFAULT_SOURCE, client=client)
 
-    # The row carries the content, and sync leaves PDFs to the first import: the page is
-    # the only request. Script 1 is not linked here, and is passed over.
-    assert client.asked == ["page 1"]
+    # Script 1 is not linked here; its row costs nothing beyond the page it was on.
+    assert client.asked == ["page 1", "pdf 2 1.1.0"]
     assert feed.written == [(2, "1.1.0")]
     assert [version.version for version in result.imported] == ["1.1.0"]
 

@@ -356,14 +356,13 @@ def import_script(
     user=None,
     enforce_owner=True,
     latest_only=False,
-    with_pdfs=True,
 ):
     """Import a script from upstream by id or URL.
 
     Takes every version the source has and this instance does not, so a first import
-    brings the script's whole history, PDFs and all. ``latest_only`` narrows that to the
-    source's latest version, when it is newer than the newest held here, and
-    ``with_pdfs=False`` leaves the PDFs behind: both are how ``sync_script`` calls it.
+    brings the script's whole history. ``latest_only`` narrows that to the source's latest
+    version, when it is newer than the newest held here, which is all routine sync asks
+    for; see ``sync_script``.
 
     Returns (script, imported, skipped) where imported is the list of ScriptVersions
     created and skipped counts the source's versions already held locally. ``user`` is
@@ -381,7 +380,7 @@ def import_script(
     script, _ = _target_script(source, upstream_id, detail.get("name"), user, enforce_owner)
 
     # Decided from the version list the source has already sent, so a version held here
-    # costs it nothing: only what is actually wanted is fetched, and its PDF if asked for.
+    # costs it nothing: only what is actually wanted is fetched, two requests apiece.
     latest = _latest_of(versions, detail.get("latest_version")) if latest_only else None
     wanted, skipped = _select_versions(versions, _held_versions(script), latest)
     if not wanted:
@@ -395,7 +394,7 @@ def import_script(
     with notifications.batched():
         for version_number, url in wanted:
             row = client.version(url)
-            pdf = client.pdf(upstream_id, row.get("version") or version_number) if with_pdfs else None
+            pdf = client.pdf(upstream_id, row.get("version") or version_number)
             created = import_version(source, row, pdf=pdf, link=link, user=user, enforce_owner=enforce_owner)
             if created is None:
                 # Arrived here by another route since the list was compared.
@@ -416,10 +415,9 @@ def sync_script(script, client=None, full=False):
 
     This is a lookup of one known script, not the scheduled sync, which is ``sync_source``.
     It asks the source for the script's list of version numbers and fetches the latest
-    version only when that is newer than the newest held here: one request when nothing is
-    new, two when something is. ``full`` instead fetches every version missing here, the
-    way a first import does. Unlike an import, it never fetches PDFs: the source's
-    maintainer asked that sync stay to the API.
+    version and its PDF only when that is newer than the newest held here: one request when
+    nothing is new, three when something is. ``full`` instead fetches every version missing
+    here, the way a first import does.
 
     Returns the list of ScriptVersions created, which is empty when already in step.
     """
@@ -434,7 +432,6 @@ def sync_script(script, client=None, full=False):
             # Sync follows scripts already linked to their source, and runs as the system.
             enforce_owner=False,
             latest_only=not full,
-            with_pdfs=False,
         )
     return imported
 
@@ -464,8 +461,8 @@ def sync_source(source, client=None):
     the latest version of every script, newest first, and version ids there only ever
     increase. So reading it page by page until reaching the newest id seen last time finds
     every script that has gained a version since, usually in one request. Each row already
-    carries its content, so nothing else is asked for: no PDFs, which the maintainer asked
-    sync to leave alone. Rows for scripts not linked here are passed over.
+    carries its content, so the only other request is the PDF of a new version of a script
+    linked here. Rows for other scripts are passed over.
 
     With no cursor yet, only the first page is read, and the cursor starts from there: there
     is nothing to say how far back to look. Versions published before that are for
@@ -511,7 +508,10 @@ def sync_source(source, client=None):
                 wanted, _ = _select_versions({version: None}, _held_versions(script), latest=version)
                 if not wanted:
                     continue
-                created = import_version(source, row, link=True, enforce_owner=False)
+                pdf = client.pdf(row["script_id"], version)
+                created = import_version(source, row, pdf=pdf, link=True, enforce_owner=False)
+            except Blocked:
+                raise
             except UpstreamError as exc:
                 result.failed.append(f"{script.name} {version}: {exc}")
                 continue

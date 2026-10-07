@@ -63,14 +63,12 @@ itself, which carries the script's content. It then remembers the newest id it s
 **Upstream cursor** row you can see in the admin.
 
 So a run costs the source one request per 50 scripts that changed since the last run,
-which for a daily run is normally **one request**, however many scripts are linked here,
-and nothing else: sync never fetches PDFs. The list leaves out hybrid and homebrew scripts
-unless asked, so sync asks for both.
+which for a daily run is normally **one request**, however many scripts are linked here.
+The only other request is one PDF for each new version of a linked script, downloaded once,
+when the version arrives. A version already held here is never downloaded again, nor is its
+PDF. The list leaves out hybrid and homebrew scripts unless asked, so sync asks for both.
 
 A few things follow from reading the list rather than each script:
-
-- **Versions added by sync have no PDF.** Only an import fetches PDFs. Add one by hand in
-  the admin, on the version, if it matters.
 
 - **Only the latest version comes across.** If a script gained two versions since the last
   run, the list only shows the newer one. Older versions missing here are left alone.
@@ -82,7 +80,7 @@ A few things follow from reading the list rather than each script:
 
 To fill in what any of that left out for one script, check it by itself. That is a lookup
 of one known script, by hand, through `/api/script_ids/<id>/`: one request when nothing is
-new, plus one for each version fetched. Like the scheduled sync, it fetches no PDFs.
+new, plus two for each version fetched.
 
 ```sh
 docker compose exec botc-scripts python manage.py sync_upstream --script 12
