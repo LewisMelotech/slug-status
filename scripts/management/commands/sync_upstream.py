@@ -2,9 +2,9 @@
 
 Safe to run on a timer: it only ever adds versions upstream has and this instance does
 not. Each source is read once, through its list of the newest version of every script,
-from the newest down to the newest version seen on the last run: usually one request.
-The only other requests are the PDFs of new versions of scripts linked here. This is the
-approach the botcscripts.com maintainer asked for, and once a day is the most it should run.
+from the newest down to the newest version seen on the last run: usually one request,
+and nothing else, since sync never fetches PDFs. This is the approach the botcscripts.com
+maintainer asked for, and once a day is the most it should run.
 
 `--script <id>` checks one script by itself instead, and `--full --script <id>` fetches
 every version missing from it, the way a first import does. Both are for running by hand.
