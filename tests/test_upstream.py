@@ -3,10 +3,11 @@ from django.contrib.auth.models import AnonymousUser
 
 from scripts.upstream import (
     DEFAULT_SOURCE,
+    Blocked,
     NotOwner,
     UpstreamClient,
     UpstreamError,
-    _latest_of,
+    _select_versions,
     _target_script,
     import_script,
     normalise_source,
@@ -102,16 +103,63 @@ def test_pdf_returns_none_rather_than_raising_when_there_is_no_pdf(response):
     assert UpstreamClient(session=FakeSession(response)).pdf(134, "1.0.0") is None
 
 
-def test_latest_of_prefers_the_declared_latest_version():
-    versions = {"1.0.0": "http://x/1", "2.0.0": "http://x/2"}
-    detail = {"latest_version": "http://x/1"}
-    assert _latest_of(versions, detail) == ("1.0.0", "http://x/1")
+@pytest.mark.parametrize("code", [403, 429])
+def test_a_refusal_from_the_source_is_blocked_not_a_passing_error(code):
+    # botcscripts.com's firewall answers an instance that has asked too much this way,
+    # and the commands stop asking it on a Blocked rather than moving to the next script.
+    client = UpstreamClient(session=FakeSession(FakeResponse(code, b"<html>The request is blocked.</html>")))
+
+    with pytest.raises(Blocked, match=f"HTTP {code}"):
+        client.script(134)
 
 
-def test_latest_of_falls_back_to_the_highest_version():
-    versions = {"1.0.0": "http://x/1", "11.0.0": "http://x/11", "9.0.0": "http://x/9"}
-    # Highest by version ordering, not lexicographically — 11.0.0 beats 9.0.0.
-    assert _latest_of(versions, {})[0] == "11.0.0"
+@pytest.mark.parametrize("code", [403, 429])
+def test_a_refused_pdf_raises_rather_than_reading_as_no_pdf(code):
+    # Read as "no PDF", a version would be stored without the PDF it has, and sync,
+    # which only fetches versions it does not hold, would never go back for it.
+    client = UpstreamClient(session=FakeSession(FakeResponse(code, b"<html>blocked</html>")))
+
+    with pytest.raises(Blocked):
+        client.pdf(134, "1.0.0")
+
+
+def test_blocked_is_an_upstream_error_so_the_page_and_api_report_it():
+    assert issubclass(Blocked, UpstreamError)
+
+
+# --- Which versions to fetch --------------------------------------------------------------
+
+OFFERED = {"1.10.0": "u10", "1.0.0": "u0", "1.9.0": "u9"}
+
+
+def test_with_nothing_held_the_whole_history_is_wanted_oldest_first():
+    # By version ordering, not as given and not lexicographically: 1.10.0 is newest.
+    for only_newer in (False, True):
+        assert _select_versions(OFFERED, [], only_newer) == ([("1.0.0", "u0"), ("1.9.0", "u9"), ("1.10.0", "u10")], 0)
+
+
+def test_versions_already_held_are_not_fetched_again():
+    assert _select_versions(OFFERED, ["1.0.0", "1.9.0"]) == ([("1.10.0", "u10")], 2)
+
+
+def test_held_versions_compare_by_value_not_spelling():
+    assert _select_versions({"1.0": "u"}, ["1.0.0"]) == ([], 1)
+
+
+def test_only_newer_wants_nothing_older_than_the_newest_held():
+    # 1.9.0 is missing here, but older than 1.10.0: filling that gap is a full sync's job.
+    assert _select_versions(OFFERED, ["1.0.0", "1.10.0"], only_newer=True) == ([], 2)
+    assert _select_versions(OFFERED, ["1.0.0", "1.10.0"]) == ([("1.9.0", "u9")], 2)
+
+
+def test_only_newer_takes_every_version_above_the_newest_held():
+    offered = {**OFFERED, "2.0.0": "u20"}
+    assert _select_versions(offered, ["1.9.0"], only_newer=True) == ([("1.10.0", "u10"), ("2.0.0", "u20")], 1)
+
+
+def test_a_version_number_this_instance_cannot_store_is_an_upstream_error():
+    with pytest.raises(UpstreamError, match="not a version number"):
+        _select_versions({"v2 beta": "u"}, [])
 
 
 def test_import_serializer_resolves_a_bare_id_against_the_default_source():
@@ -124,7 +172,6 @@ def test_import_serializer_resolves_a_bare_id_against_the_default_source():
     # Linking is the default: an import you have to opt into following would leave
     # sync_upstream silently doing nothing.
     assert serializer.validated_data["link"] is True
-    assert serializer.validated_data["all_versions"] is False
 
 
 def test_import_serializer_takes_the_source_from_a_url_reference():
@@ -385,7 +432,7 @@ def test_a_refused_import_costs_the_source_one_request_not_a_download_per_versio
     client = RecordingClient()
 
     with pytest.raises(NotOwner):
-        import_script("134", client=client, user=None, all_versions=True)
+        import_script("134", client=client, user=None)
 
     assert client.asked == ["script"]
 
@@ -455,9 +502,7 @@ def test_the_import_page_imports_as_the_visitor(monkeypatch):
     view = views.ScriptImportView()
     view.request = RequestFactory().post("/script/import")
     view.request.user = StubImporter(pk=3)
-    form = SimpleNamespace(
-        cleaned_data={"upstream_id": 134, "source": DEFAULT_SOURCE, "link": True, "all_versions": False}
-    )
+    form = SimpleNamespace(cleaned_data={"upstream_id": 134, "source": DEFAULT_SOURCE, "link": True})
 
     response = view.form_valid(form)
 
@@ -525,3 +570,205 @@ def test_the_import_page_refuses_while_uploads_are_disabled(settings):
 
     with pytest.raises(PermissionDenied):
         views.ScriptImportView.as_view()(request)
+
+
+# --- What each kind of import costs the source ------------------------------------------
+
+
+class ServingClient:
+    """An upstream holding one script, recording every request made of it."""
+
+    def __init__(self, *numbers):
+        self.numbers = list(numbers)
+        self.asked = []
+
+    def script(self, upstream_id):
+        self.asked.append("script")
+        return {
+            "name": "Sects and Violets",
+            "versions": {number: f"/api/scripts/{i}/" for i, number in enumerate(self.numbers)},
+        }
+
+    def version(self, url):
+        number = self.numbers[int(url.strip("/").rsplit("/", 1)[-1])]
+        self.asked.append(f"version {number}")
+        return {"script_id": 134, "name": "Sects and Violets", "version": number, "content": []}
+
+    def pdf(self, upstream_id, version):
+        # No PDF: what is under test is that it was asked for, not what came back.
+        self.asked.append(f"pdf {version}")
+
+
+@pytest.fixture
+def held_here(monkeypatch):
+    """The database stubbed away: the versions held here, and what an import writes."""
+    from types import SimpleNamespace
+
+    from scripts import upstream
+
+    state = SimpleNamespace(versions=[], written=[], checked=0)
+    linked = held_script(upstream_source=DEFAULT_SOURCE)
+    linked.upstream_id = 134
+    state.script = linked
+    scripts_held(monkeypatch, linked=linked, by_name=None)
+    monkeypatch.setattr(upstream, "_held_versions", lambda script: state.versions)
+
+    def write(source, row, **kwargs):
+        state.written.append(row["version"])
+        return SimpleNamespace(version=row["version"], pdf=None)
+
+    def check(*args, **kwargs):
+        state.checked += 1
+
+    monkeypatch.setattr(upstream, "import_version", write)
+    monkeypatch.setattr(upstream, "_record_check", check)
+    return state
+
+
+def test_routine_sync_costs_one_request_when_nothing_is_new(held_here):
+    from scripts.upstream import sync_script
+
+    held_here.versions = ["1.0.0", "1.1.0", "1.2.0"]
+    client = ServingClient("1.0.0", "1.1.0", "1.2.0")
+
+    assert sync_script(held_here.script, client=client) == []
+    assert client.asked == ["script"]
+    # Still recorded as checked, so last_synced says when the source was last asked.
+    assert held_here.checked == 1
+
+
+def test_routine_sync_fetches_only_what_is_newer_than_the_newest_held(held_here):
+    from scripts.upstream import sync_script
+
+    held_here.versions = ["1.0.0", "1.1.0"]
+    client = ServingClient("1.0.0", "1.1.0", "1.2.0")
+
+    sync_script(held_here.script, client=client)
+
+    assert client.asked == ["script", "version 1.2.0", "pdf 1.2.0"]
+    assert held_here.written == ["1.2.0"]
+
+
+def test_routine_sync_leaves_an_older_gap_and_a_full_sync_fills_it(held_here):
+    from scripts.upstream import sync_script
+
+    held_here.versions = ["1.0.0", "2.0.0"]
+
+    routine = ServingClient("1.0.0", "1.5.0", "2.0.0")
+    sync_script(held_here.script, client=routine)
+    assert routine.asked == ["script"]
+
+    full = ServingClient("1.0.0", "1.5.0", "2.0.0")
+    sync_script(held_here.script, client=full, full=True)
+    assert full.asked == ["script", "version 1.5.0", "pdf 1.5.0"]
+
+
+def test_a_first_import_takes_the_whole_history_oldest_first(held_here):
+    client = ServingClient("1.10.0", "1.0.0", "1.9.0")
+
+    _, imported, skipped = import_script("134", client=client, user=None)
+
+    assert held_here.written == ["1.0.0", "1.9.0", "1.10.0"]
+    assert [version.version for version in imported] == held_here.written
+    assert skipped == 0
+    assert len(client.asked) == 1 + 2 * 3
+
+
+def test_importing_again_fetches_only_what_is_missing(held_here):
+    held_here.versions = ["1.0.0", "1.1.0"]
+    client = ServingClient("1.0.0", "1.1.0", "1.2.0")
+
+    _, _, skipped = import_script("134", client=client, user=None)
+
+    assert client.asked == ["script", "version 1.2.0", "pdf 1.2.0"]
+    assert skipped == 2
+
+
+# --- The commands stop asking a source that refuses ---------------------------------------
+
+
+def _linked(name, source):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(name=name, upstream_source=source, upstream_url=f"{source}/script/1")
+
+
+def test_a_full_sync_is_one_script_at_a_time():
+    from django.core.management import CommandError, call_command
+
+    with pytest.raises(CommandError, match="needs --script"):
+        call_command("sync_upstream", "--full")
+
+
+def test_sync_stops_asking_a_source_once_it_refuses(monkeypatch):
+    from io import StringIO
+
+    from django.core.management import CommandError, call_command
+
+    from scripts import upstream
+
+    other = "http://other.example"
+    scripts = [_linked("A", DEFAULT_SOURCE), _linked("B", other), _linked("C", DEFAULT_SOURCE)]
+    asked = []
+
+    def sync(script, full=False):
+        asked.append(script.name)
+        if script.upstream_source == DEFAULT_SOURCE:
+            raise Blocked("refused with HTTP 403")
+        return []
+
+    monkeypatch.setattr(upstream, "linked_scripts", lambda: scripts)
+    monkeypatch.setattr(upstream, "sync_script", sync)
+    err = StringIO()
+
+    with pytest.raises(CommandError, match="1 script"):
+        call_command("sync_upstream", stdout=StringIO(), stderr=err)
+
+    # C shares A's source and is never asked about; B's source is a different server.
+    assert asked == ["A", "B"]
+    assert f"not checked: 1 script(s) from {DEFAULT_SOURCE}" in err.getvalue()
+
+
+def test_import_script_stops_at_the_first_refusal(monkeypatch):
+    from io import StringIO
+
+    from django.core.management import CommandError, call_command
+
+    from scripts import upstream
+
+    asked = []
+
+    def refuse(reference, **kwargs):
+        asked.append(reference)
+        raise Blocked("refused with HTTP 403")
+
+    monkeypatch.setattr(upstream, "import_script", refuse)
+    err = StringIO()
+
+    with pytest.raises(CommandError, match="3 of 3"):
+        call_command("import_script", "1", "2", "3", stdout=StringIO(), stderr=err)
+
+    assert asked == ["1"]
+    assert "not attempted: 2, 3" in err.getvalue()
+
+
+def test_the_admin_sync_action_stops_asking_a_source_once_it_refuses(monkeypatch):
+    from django.contrib.admin.sites import AdminSite
+
+    from scripts import models, upstream
+    from scripts.admin import ScriptAdmin
+
+    asked, said = [], []
+
+    def sync(script, full=False):
+        asked.append(script.name)
+        raise Blocked("refused with HTTP 403")
+
+    monkeypatch.setattr(upstream, "sync_script", sync)
+    model_admin = ScriptAdmin(models.Script, AdminSite())
+    monkeypatch.setattr(model_admin, "message_user", lambda request, message, *args, **kwargs: said.append(message))
+
+    model_admin.sync_now(None, [_linked("A", DEFAULT_SOURCE), _linked("B", DEFAULT_SOURCE)])
+
+    assert asked == ["A"]
+    assert any("not synced" in message for message in said)

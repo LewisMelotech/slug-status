@@ -46,9 +46,18 @@ class ScriptAdmin(admin.ModelAdmin):
     @admin.action(description="Sync selected scripts from their upstream instance")
     def sync_now(self, request, queryset):
         synced = skipped = 0
+        blocked = set()
         for script in queryset:
+            if script.upstream_source in blocked:
+                self.message_user(request, f"{script}: not synced, its source is refusing requests.", messages.WARNING)
+                continue
             try:
                 imported = upstream.sync_script(script)
+            except upstream.Blocked as exc:
+                # Asking it about the rest of the selection would only be refused as well.
+                blocked.add(script.upstream_source)
+                self.message_user(request, f"{script}: {exc}", level=messages.ERROR)
+                continue
             except upstream.UpstreamError as exc:
                 self.message_user(request, f"{script}: {exc}", level=messages.ERROR)
                 continue

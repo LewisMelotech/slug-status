@@ -29,14 +29,12 @@ recalculated locally by the same code the upload form uses, so an imported scrip
 stored like an uploaded one, and adding to an existing script follows the same
 [ownership rule](#who-may-import-into-an-existing-script).
 
-By default only the **latest** version is imported. For the full history:
+An import takes the script's **full history**: every version the source has, oldest
+first, so the newest ends up with the `latest` flag. It costs the source one request for
+the script's list of versions, then two for each version (the version and its PDF).
 
-```sh
-python manage.py import_script 77 --all-versions
-```
-
-Importing is idempotent. Re-running reports `already held` and writes nothing, so it is
-safe in a script or a cron job.
+Importing is idempotent. A version already held here is never fetched again, so re-running
+asks the source for the version list only, reports `already held`, and writes nothing.
 
 ## Staying linked
 
@@ -53,14 +51,28 @@ would; older versions file in behind without disturbing it. Like every upload, w
 arrives `offline`, so a sync never changes what the Discord bot serves until someone puts
 the version on the server.
 
-Sync asks for **every** version the source holds, not only the newest, so a script
-imported with just its latest version gains its older ones on the first sync.
+**What a sync costs the other server.** For each linked script, sync asks the source for
+one thing: the script's list of version numbers. It compares that with the newest version
+held here, and only when the source has a **newer** one does it fetch that version and its
+PDF. So a script with nothing new costs one request per run, however long its history, and
+a new version costs two more.
 
-**What a sync costs the other server.** A linked script is asked about in full whether or
-not it has changed: one request for the script, then two for each of its versions — the
-version itself and its PDF — including versions you already hold. A script with three
-versions is seven requests, every run. That is worth knowing before you link a lot of
-scripts, and it is why `--no-link` exists for a copy you do not need to follow.
+Routine sync deliberately looks only forward. A version missing from further back in the
+history, older than the newest held here, is left alone. To fill such gaps, run a full sync
+for that script by hand, which fetches every version missing here, as a first import does:
+
+```sh
+docker compose exec botc-scripts python manage.py sync_upstream --full --script 12
+```
+
+`--full` only works with `--script`, so a full pass over every linked script cannot be
+started by accident. `12` is the script's id **here**, as shown in the admin.
+
+**When the source refuses.** botcscripts.com blocks an instance that asks it too much,
+answering `403`, and the block stays until it is lifted by hand. A refusal (`403` or `429`)
+stops the run asking that source anything else: the remaining scripts from it are reported
+as `not checked` rather than each sending a request that would be refused too. While
+blocked, stop the stack's `sync` service with `docker compose stop sync`.
 
 Useful flags:
 
@@ -68,6 +80,7 @@ Useful flags:
 |---|---|
 | `--dry-run` | List what would be synced, write nothing |
 | `--script <id>` | Sync one local script, whether or not sync is enabled for it |
+| `--full` | With `--script`, fetch every version missing here, not only newer ones |
 
 Import without linking, if you want a one-time copy that sync will ignore:
 
@@ -85,8 +98,8 @@ logged and the schedule carries on, since someone else's server being down shoul
 it. Watch it with `docker compose logs sync`.
 
 `SYNC_ON_START=true` also runs one pass at start-up. It is off by default: the stack is
-restarted repeatedly while being set up, and every restart would be another full pass over
-someone else's server for no new data.
+restarted repeatedly while being set up, and every restart would be another request per
+linked script to someone else's server, for no new data.
 
 A run announces to Discord once, however many scripts gained a version — see
 `NOTIFICATIONS.md`.
@@ -100,9 +113,9 @@ Without the `sync` service, run it from cron on the host instead, hourly to matc
 ## From the web UI
 
 **Import** sits in the site's navigation next to Upload, at `/script/import`, and the
-upload page links to it. Paste an id or a link, choose whether to take every version and
-whether to keep it linked, and submit — the imported script's page opens with a summary
-of what came across.
+upload page links to it. Paste an id or a link, choose whether to keep it linked, and
+submit. Every version missing here comes across, and the imported script's page opens with
+a summary of what did.
 
 It is open to whoever may upload, including anonymous visitors, because importing a
 script someone else published is the same act as uploading it by hand. That includes the
@@ -147,8 +160,10 @@ curl -u botuser:botpass -X POST https://your-instance/api/script_ids/import/ \
 |---|---|---|
 | `reference` | required | Script id, or a link to a script page |
 | `source` | the public site | Instance to import from, when `reference` is a bare id |
-| `all_versions` | `false` | Import the full history rather than only the latest |
 | `link` | `true` | Follow this script in `sync_upstream` |
+
+Every import takes the full history of versions not already held here. An `all_versions`
+field, which earlier versions of this fork accepted, is now ignored.
 
 Responses:
 
@@ -156,7 +171,7 @@ Responses:
 |---|---|
 | `201` | At least one version was imported |
 | `200` | Everything was already held — `imported` is empty and `skipped` counts them |
-| `400` | Unusable reference, or the far side could not be reached |
+| `400` | Unusable reference, or the far side could not be reached or refused the request |
 | `403` | No credentials, wrong credentials, or missing the permission, **or** the script it would import into belongs to someone else, **or** `UPLOAD_DISABLED` is set and the caller is not staff |
 
 The body carries the local script, the versions imported, how many were skipped, the
@@ -234,6 +249,8 @@ the script it already created rather than forking a second copy.
 - **The public site rejects the `python-requests` User-Agent** with a 403 on the PDF
   download path. The client sets its own; do not remove it or PDFs will silently stop
   importing while the JSON keeps working.
+- **The public site blocks instances that ask too much.** Keep `SYNC_PERIOD` generous,
+  and see [When the source refuses](#staying-linked) for what happens once it does.
 - **Nothing is pushed back.** This is a one-way copy: votes, comments and edits made here
   never reach the source instance.
 - A script created by an import has **no owner**, so anyone who can upload can add versions

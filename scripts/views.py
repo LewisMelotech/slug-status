@@ -1523,7 +1523,6 @@ class ScriptImportView(generic.FormView):
                     form.cleaned_data["upstream_id"],
                     source=form.cleaned_data["source"],
                     link=form.cleaned_data.get("link", False),
-                    all_versions=form.cleaned_data.get("all_versions", False),
                     user=self.request.user,
                 )
         except upstream.UpstreamError as exc:

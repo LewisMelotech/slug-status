@@ -76,11 +76,11 @@ class ScriptViewSet(viewsets.ReadOnlyModelViewSet):
         """
         Import a script from another botc-scripts instance.
 
-        POST /api/script_ids/import/ with {"reference": "134"} imports the latest
-        version of script 134 from the public site; "reference" also accepts a link
-        to a script page, and "source" names a different instance for a bare id.
-        Pass {"all_versions": true} for the full history, or {"link": false} for a
-        one-time copy that sync_upstream will not follow. Requires the
+        POST /api/script_ids/import/ with {"reference": "134"} imports every version
+        of script 134 from the public site that is not already held here; "reference"
+        also accepts a link to a script page, and "source" names a different instance
+        for a bare id. Pass {"link": false} for a one-time copy that sync_upstream will
+        not follow. Requires the
         scripts.api_write_permission permission. When a script of the same name
         already exists and has an owner, only that owner may import into it: 403.
         Refused with 403 while UPLOAD_DISABLED is set, except for staff, as uploads are.
@@ -97,7 +97,6 @@ class ScriptViewSet(viewsets.ReadOnlyModelViewSet):
                     data["upstream_id"],
                     source=data["source"],
                     link=data["link"],
-                    all_versions=data["all_versions"],
                     user=request.user,
                 )
         except upstream.NotOwner as exc:

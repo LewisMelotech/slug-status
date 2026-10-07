@@ -262,11 +262,6 @@ class ScriptImportForm(forms.Form):
         required=False,
         help_text=f"Leave blank for {upstream.DEFAULT_SOURCE}. Only used when an id is given without a link.",
     )
-    all_versions = forms.BooleanField(
-        label="Import every version",
-        required=False,
-        help_text="Off imports only the latest version.",
-    )
     link = forms.BooleanField(
         label="Keep it linked",
         required=False,

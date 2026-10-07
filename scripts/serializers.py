@@ -138,7 +138,6 @@ class ScriptImportSerializer(serializers.Serializer):
 
     reference = serializers.CharField(required=True, allow_blank=False)
     source = serializers.CharField(required=False, allow_blank=False, default=upstream.DEFAULT_SOURCE)
-    all_versions = serializers.BooleanField(required=False, default=False)
     link = serializers.BooleanField(required=False, default=True)
 
     def validate(self, attrs):

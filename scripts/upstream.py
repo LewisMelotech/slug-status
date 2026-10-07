@@ -36,6 +36,19 @@ class NotOwner(UpstreamError):
     """
 
 
+class Blocked(UpstreamError):
+    """The source refused us outright (403) or told us to slow down (429).
+
+    botcscripts.com's firewall blocks an instance that has asked it too much, and the
+    block stays until it is lifted by hand. Every further request in the same run would
+    be refused too and could only count against us, so the commands stop asking that
+    source at the first refusal.
+    """
+
+
+BLOCKED_STATUSES = (403, 429)
+
+
 def normalise_source(source):
     """Reduce a source to a bare scheme://host[:port], so links compare equal."""
     source = str(source or "").strip()
@@ -105,8 +118,16 @@ class UpstreamClient:
         except requests.RequestException as exc:
             raise UpstreamError(f"{self.source} could not be reached: {exc}") from exc
 
+    def _blocked(self, response):
+        return Blocked(
+            f"{self.source} refused the request with HTTP {response.status_code}: this instance has "
+            "probably been blocked for making too many requests. Nothing more was asked of it."
+        )
+
     def _json(self, path):
         response = self._get(path)
+        if response.status_code in BLOCKED_STATUSES:
+            raise self._blocked(response)
         if response.status_code == 404:
             raise UpstreamError(f"{url_of(response)} was not found on {self.source}.")
         if response.status_code != 200:
@@ -134,9 +155,13 @@ class UpstreamClient:
 
         Upstream answers a missing PDF with a 500 carrying an HTML page rather than a
         404, so anything that is not a PDF body is treated as 'no PDF' instead of an
-        error — importing the JSON is still worthwhile when the PDF is absent.
+        error — importing the JSON is still worthwhile when the PDF is absent. Being
+        refused is the exception: that raises, so a version is not stored without a PDF
+        it does have just because the source had stopped answering us.
         """
         response = self._get(f"/script/{script_id}/{version}/download_pdf")
+        if response.status_code in BLOCKED_STATUSES:
+            raise self._blocked(response)
         if response.status_code != 200 or not response.content.startswith(b"%PDF"):
             return None
         return response.content
@@ -201,6 +226,48 @@ def _target_script(source, upstream_id, name, user=None, enforce_owner=True):
     return models.Script(name=name), True
 
 
+def _record_check(script, source, upstream_id, link):
+    """Note that the source was asked about ``script`` just now, linking it if wanted."""
+    if link:
+        script.upstream_source = source
+        script.upstream_id = upstream_id
+        script.sync_enabled = True
+    script.last_synced = timezone.now()
+    script.save()
+
+
+def _version(number):
+    try:
+        return Version(str(number))
+    except (ValueError, NotImplementedError) as exc:
+        raise UpstreamError(f"'{number}' is not a version number this instance can store.") from exc
+
+
+def _held_versions(script):
+    """The version numbers this instance holds for ``script``; none for one not yet saved."""
+    if script.pk is None:
+        return []
+    return list(script.versions.values_list("version", flat=True))
+
+
+def _select_versions(available, held, only_newer=False):
+    """Which of the source's versions to fetch, oldest first, and how many are held here.
+
+    ``available`` is the source's {version number: url} and ``held`` the numbers this
+    instance already has. Everything not held is wanted, unless ``only_newer``, when only
+    versions newer than the newest held are: a gap further back in the history is left
+    for a full sync to fill. With nothing held, the whole history is wanted either way.
+    """
+    held = {_version(number) for number in held}
+    offered = sorted(((_version(number), number, url) for number, url in available.items()), key=lambda o: o[0])
+    newest = max(held) if only_newer and held else None
+    wanted = [
+        (number, url) for parsed, number, url in offered if parsed not in held and (newest is None or parsed > newest)
+    ]
+    already_held = sum(1 for parsed, _, _ in offered if parsed in held)
+    return wanted, already_held
+
+
 @transaction.atomic
 def import_version(source, row, pdf=None, link=True, user=None, enforce_owner=True):
     """Create one ScriptVersion from an upstream version row.
@@ -217,12 +284,7 @@ def import_version(source, row, pdf=None, link=True, user=None, enforce_owner=Tr
         raise UpstreamError(f"Upstream version row is missing script_id, name or version: {row!r}")
 
     script, is_new = _target_script(source, upstream_id, name, user, enforce_owner)
-    if link:
-        script.upstream_source = source
-        script.upstream_id = upstream_id
-        script.sync_enabled = True
-    script.last_synced = timezone.now()
-    script.save()
+    _record_check(script, source, upstream_id, link)
 
     if not is_new and script.versions.filter(version=version).exists():
         return None
@@ -268,16 +330,20 @@ def import_script(
     reference,
     source=DEFAULT_SOURCE,
     link=True,
-    all_versions=False,
     client=None,
     user=None,
     enforce_owner=True,
+    only_newer=False,
 ):
     """Import a script from upstream by id or URL.
 
+    Takes every version the source has and this instance does not, so a first import
+    brings the script's whole history. ``only_newer`` narrows that to versions newer than
+    the newest held here, which is all routine sync asks for; see ``sync_script``.
+
     Returns (script, imported, skipped) where imported is the list of ScriptVersions
-    created and skipped counts versions already held locally. ``user`` is who is
-    importing; see ``_target_script`` for the ownership rule and ``enforce_owner``.
+    created and skipped counts the source's versions already held locally. ``user`` is
+    who is importing; see ``_target_script`` for the ownership rule and ``enforce_owner``.
     """
     source, upstream_id = parse_reference(reference, source)
     client = client or UpstreamClient(source)
@@ -288,20 +354,26 @@ def import_script(
 
     # Refused here, before anything else is fetched: every version and its PDF is a request
     # to someone else's server, and a refusal does not need any of them.
-    _target_script(source, upstream_id, detail.get("name"), user, enforce_owner)
+    script, _ = _target_script(source, upstream_id, detail.get("name"), user, enforce_owner)
 
-    wanted = versions.items() if all_versions else [_latest_of(versions, detail)]
+    # Decided from the version list the source has already sent, so a version held here
+    # costs it nothing: only what is actually wanted is fetched, two requests apiece.
+    wanted, skipped = _select_versions(versions, _held_versions(script), only_newer)
+    if not wanted:
+        # import_version records the check when it runs; nothing else will this time.
+        _record_check(script, source, upstream_id, link)
 
     # One announcement for the import, not one per version: pulling a script's whole
     # history writes a row per version, and that is still only one new script worth
     # telling a channel about.
-    imported, skipped = [], 0
+    imported = []
     with notifications.batched():
         for version_number, url in wanted:
             row = client.version(url)
             pdf = client.pdf(upstream_id, row.get("version") or version_number)
             created = import_version(source, row, pdf=pdf, link=link, user=user, enforce_owner=enforce_owner)
             if created is None:
+                # Arrived here by another route since the list was compared.
                 skipped += 1
                 logger.info("Already held %s %s from %s", detail.get("name"), version_number, source)
             else:
@@ -314,16 +386,15 @@ def import_script(
     return script, imported, skipped
 
 
-def _latest_of(versions, detail):
-    latest_url = detail.get("latest_version")
-    for version_number, url in versions.items():
-        if url == latest_url:
-            return version_number, url
-    return max(versions.items(), key=lambda item: Version(item[0]))
+def sync_script(script, client=None, full=False):
+    """Pull versions upstream has that this script does not.
 
+    Routine sync asks the source for one thing, the script's list of version numbers,
+    and fetches a version and its PDF only when its number is newer than the newest held
+    here. A script with nothing new costs the source a single request.
 
-def sync_script(script, client=None):
-    """Pull any versions upstream has that this script does not.
+    ``full`` also fills in older versions missing here, the way a first import does. It
+    is for running by hand against one script: `sync_upstream --full --script <id>`.
 
     Returns the list of ScriptVersions created, which is empty when already in step.
     """
@@ -334,10 +405,10 @@ def sync_script(script, client=None):
             script.upstream_id,
             source=script.upstream_source,
             link=True,
-            all_versions=True,
             client=client,
             # Sync follows scripts already linked to their source, and runs as the system.
             enforce_owner=False,
+            only_newer=not full,
         )
     return imported
 

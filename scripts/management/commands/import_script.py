@@ -1,4 +1,4 @@
-"""Import a script from another botc-scripts instance, PDF and all."""
+"""Import a script from another botc-scripts instance: every version, PDFs and all."""
 
 from django.core.management.base import BaseCommand, CommandError
 
@@ -20,11 +20,6 @@ class Command(BaseCommand):
             help=f"Instance to import from when a bare id is given. Default {upstream.DEFAULT_SOURCE}.",
         )
         parser.add_argument(
-            "--all-versions",
-            action="store_true",
-            help="Import every version rather than only the latest.",
-        )
-        parser.add_argument(
             "--no-link",
             action="store_true",
             help="Import once without linking, so sync_upstream will not follow it.",
@@ -32,17 +27,23 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         failures = 0
-        for reference in options["reference"]:
+        for position, reference in enumerate(options["reference"]):
             try:
                 with notifications.attributed("Imported", user=None, origin="the command line"):
                     script, imported, skipped = upstream.import_script(
                         reference,
                         source=options["source"],
                         link=not options["no_link"],
-                        all_versions=options["all_versions"],
                         # Run from a shell by whoever administers the instance, not by a visitor.
                         enforce_owner=False,
                     )
+            except upstream.Blocked as exc:
+                # The rest would be refused as well, and each refusal only counts against us.
+                failures += len(options["reference"]) - position
+                self.stderr.write(self.style.ERROR(f"{reference}: {exc}"))
+                if position + 1 < len(options["reference"]):
+                    self.stderr.write(f"not attempted: {', '.join(options['reference'][position + 1 :])}")
+                break
             except upstream.UpstreamError as exc:
                 failures += 1
                 self.stderr.write(self.style.ERROR(f"{reference}: {exc}"))
