@@ -112,6 +112,16 @@ class Script(models.Model):
         ),
     )
     owner = models.ForeignKey(User, blank=True, null=True, on_delete=models.SET_NULL, related_name="+")
+    # An import makes no owner, so that ownership, and who may add versions, works as it
+    # always has. This records who it was instead, so they can look after it; see may_manage.
+    imported_by = models.ForeignKey(
+        User,
+        blank=True,
+        null=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        help_text="Who imported it, if they were signed in. They may look after it as its owner may.",
+    )
     num_downloads = models.IntegerField(default=0)
     upstream_source = models.URLField(
         null=True,
@@ -161,15 +171,16 @@ class Script(models.Model):
         """Whether ``user`` may look after this script: its versions' PDFs, and its
         Minecraft customisations.
 
-        Narrower than ``may_add_versions``: its owner, and staff or superusers. A script
-        with no owner, as every imported one has, is staff's alone, since both are shown as
-        the script's own and anyone at all could otherwise change them.
+        Narrower than ``may_add_versions``: its owner, whoever imported it, and staff or
+        superusers. A script with neither, such as an anonymous upload or import, is staff's
+        alone, since both are shown as the script's own and anyone at all could otherwise
+        change them.
         """
         if not getattr(user, "is_authenticated", False):
             return False
         if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False):
             return True
-        return self.owner_id is not None and self.owner_id == user.pk
+        return user.pk is not None and user.pk in (self.owner_id, self.imported_by_id)
 
     def save(self, *args, **kwargs):
         # Canonicalise here rather than only at the form/serializer boundary so

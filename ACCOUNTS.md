@@ -103,10 +103,17 @@ they get one. It is narrower than adding a version:
 | The script | Who may upload a PDF for its versions |
 |---|---|
 | Has an owner | The owner, **staff** and **superusers** |
-| Has no owner (an anonymous upload, or one created by an import) | **Staff** and **superusers** only |
+| Was imported by someone signed in | **Whoever imported it**, **staff** and **superusers** |
+| Neither (an anonymous upload or import) | **Staff** and **superusers** only |
 
-An unowned script is not open to everyone here, as it is for adding versions, because a PDF
-is shown as the script's own. The file is checked as the upload form checks one: a `.pdf`
+An import gives a script no owner, so that who may add versions to it works as it always
+has. It records who imported it instead, if they were signed in, as **Imported by** in the
+admin, and they look after it as an owner would: here, and its Minecraft Customisations
+below. The script page shows them an **Imported by you** badge. Scripts imported before this
+was recorded have no importer; staff can set one in the admin.
+
+A script with neither is not open to everyone here, as it is for adding versions, because a
+PDF is shown as the script's own. The file is checked as the upload form checks one: a `.pdf`
 that starts like a PDF, within the size limit. `UPLOAD_DISABLED` holds owners to it as it
 does uploads, and lets staff through.
 
@@ -117,8 +124,8 @@ the Minecraft server, such as its colour (the **?** beside it says as much). It 
 the script, not a version, and is shown on the Server page for whoever deploys it.
 
 - **Uploading or importing a new script** sets it, for whoever does so, signed in or not.
-- **Afterwards**, the same people as for PDFs above can change it: the owner, staff and
-  superusers, or staff alone for a script with no owner. They see it, pre-filled, when
+- **Afterwards**, the same people as for PDFs above can change it: the owner, whoever
+  imported it, staff and superusers, or staff alone for a script with neither. They see it, pre-filled, when
   uploading a new version, and as an edit box on the script page. Nobody else sees it there.
 - **Importing into a script that was already here** only changes it for those people.
   Anyone else is told it was left as it was, and an empty box changes nothing.

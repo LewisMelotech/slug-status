@@ -259,6 +259,10 @@ def import_version(row, link=True, user=None, enforce_owner=True):
         raise UpstreamError(f"Upstream version row is missing script_id, name or version: {row!r}")
 
     script, is_new = _target_script(upstream_id, name, user, enforce_owner)
+    if is_new and getattr(user, "is_authenticated", False):
+        # Whoever brought it here, as the site or the API saw them. Sync and the command
+        # line pass no user, and a script that was already here keeps its own record.
+        script.imported_by = user
     _record_check(script, upstream_id, link)
 
     if not is_new and script.versions.filter(version=version).exists():

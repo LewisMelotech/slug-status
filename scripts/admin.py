@@ -29,7 +29,7 @@ class ScriptAdminForm(forms.ModelForm):
 
 class ScriptAdmin(admin.ModelAdmin):
     form = ScriptAdminForm
-    list_display = ["pk", "name", "slug", "owner", "upstream_id", "sync_enabled", "last_synced"]
+    list_display = ["pk", "name", "slug", "owner", "imported_by", "upstream_id", "sync_enabled", "last_synced"]
     list_display_links = ["pk", "name"]
     list_editable = ["slug", "sync_enabled"]
     list_filter = ["sync_enabled"]

@@ -257,10 +257,11 @@ read-only, since imports are built from those rows exactly as botcscripts.com se
 
 ## What is stored
 
-Four fields on `Script`:
+Five fields on `Script`:
 
 | Field | Meaning |
 |---|---|
+| `imported_by` | Who imported it, if they were signed in, through the page or the API. Not set by sync or the command line, and kept if the script is imported again |
 | `upstream_source` | `https://www.botcscripts.com` for anything imported. Only scripts with it are synced |
 | `upstream_id` | The script id **there**, unrelated to the id here |
 | `sync_enabled` | Whether `sync_upstream` follows it |
@@ -295,3 +296,5 @@ the first sync, plus whatever imports have looked up.
   never reach botcscripts.com.
 - A script created by an import has **no owner**, so anyone who can upload can add versions
   to it. Set an owner in the admin if that matters to you, and the rule below then applies.
+  It does record who imported it, who can look after its PDFs and Minecraft Customisations
+  as an owner can; see `ACCOUNTS.md`.

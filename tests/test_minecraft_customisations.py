@@ -253,3 +253,86 @@ def test_adding_a_version_shows_the_box_only_to_who_may_manage_the_script(monkey
     assert ("minecraft_customisations" in form.fields) is shown
     if shown:
         assert form.initial["minecraft_customisations"] == "green"
+
+
+# --- Who imported a script -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "owner_id, imported_by_id, user, allowed",
+    [
+        (None, 5, StubUser(5), True),  # the importer
+        (None, 5, StubUser(6), False),  # anyone else
+        (1, 5, StubUser(5), True),  # an owner set later does not shut the importer out
+        (1, 5, StubUser(1), True),
+        (None, None, StubUser(5), False),  # imported anonymously: staff's alone
+        (None, None, StubUser(5, is_staff=True), True),
+    ],
+)
+def test_whoever_imported_a_script_may_look_after_it(owner_id, imported_by_id, user, allowed):
+    script = models.Script(name="Sects and Violets", owner_id=owner_id, imported_by_id=imported_by_id)
+
+    assert script.may_manage(user) is allowed
+
+
+class _Stop(Exception):
+    pass
+
+
+def _importing(monkeypatch, user, is_new=True):
+    """Run import_version as far as recording the check, and return the script it built."""
+    seen = {}
+    target = models.Script(name="Sects and Violets", imported_by_id=None if is_new else 9)
+    monkeypatch.setattr(upstream, "_target_script", lambda *args, **kwargs: (target, is_new))
+
+    def record(script, upstream_id, link):
+        seen["script"] = script
+        raise _Stop
+
+    monkeypatch.setattr(upstream, "_record_check", record)
+    # Past its transaction.atomic, which would need a database these tests do not have.
+    with pytest.raises(_Stop):
+        upstream.import_version.__wrapped__(
+            {"script_id": 134, "name": "Sects and Violets", "version": "1.0.0"}, user=user
+        )
+    return seen["script"]
+
+
+def test_an_import_records_who_created_the_script(monkeypatch):
+    from django.contrib.auth.models import User
+
+    importer = User(pk=5, username="importer")
+
+    assert _importing(monkeypatch, importer).imported_by == importer
+
+
+@pytest.mark.parametrize("who", ["anonymous", "nobody"])
+def test_an_anonymous_import_or_a_sync_records_nobody(monkeypatch, who):
+    from django.contrib.auth.models import AnonymousUser
+
+    # Sync and the command line import with no user at all.
+    user = AnonymousUser() if who == "anonymous" else None
+
+    assert _importing(monkeypatch, user).imported_by_id is None
+
+
+def test_importing_into_a_script_already_here_keeps_its_record(monkeypatch):
+    from django.contrib.auth.models import User
+
+    script = _importing(monkeypatch, User(pk=5, username="latecomer"), is_new=False)
+
+    assert script.imported_by_id == 9
+
+
+def test_the_server_page_says_who_imported_a_script_with_no_owner(rendering):
+    from django.contrib.auth.models import User
+
+    from tests.test_server_status import _queue_row, _render_queue
+
+    imported = _queue_row(7, "Assigned Mutant at Birth", "1.0.6")
+    imported.script.imported_by = User(pk=5, username="importer")
+
+    html = _render_queue([imported, _queue_row(8, "Trouble Brewing", "1.0.0")])
+
+    assert 'importer <span class="text-muted">(imported)</span>' in html
+    assert "anonymous" in html

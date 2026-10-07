@@ -160,6 +160,10 @@
         <div class="col-auto align-self-center">
             <h4><span class="badge badge-pill badge-dark">You</span></h4>
         </div>
+    {% elif user.is_authenticated and script_version.script.imported_by == user %}
+        <div class="col-auto align-self-center">
+            <h4><span class="badge badge-pill badge-dark" title="You imported this script">Imported by you</span></h4>
+        </div>
     {% endif %}
 
     {% if script_version.tags.all|length > 0 %}

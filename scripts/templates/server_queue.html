@@ -70,7 +70,15 @@
         </td>
         <td>{{ version.script.minecraft_customisations|linebreaksbr|default:"—" }}</td>
         <td>{{ version.author|default:"—" }}</td>
-        <td>{{ version.script.owner|default:"anonymous" }}</td>
+        <td>
+          {% if version.script.owner %}
+            {{ version.script.owner }}
+          {% elif version.script.imported_by %}
+            {{ version.script.imported_by }} <span class="text-muted">({% trans 'imported' %})</span>
+          {% else %}
+            anonymous
+          {% endif %}
+        </td>
         <td>{{ version.created|date:"j M Y, H:i" }}</td>
         <td>
           <a href="{% url 'download_json' pk=version.script.pk version=version.version %}">JSON</a>

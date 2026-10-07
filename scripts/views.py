@@ -221,7 +221,7 @@ class ScriptView(generic.DetailView):
         return super().get_object(queryset)
 
     def get_queryset(self):
-        return models.Script.objects.select_related("owner").prefetch_related(
+        return models.Script.objects.select_related("owner", "imported_by").prefetch_related(
             Prefetch(
                 "versions",
                 queryset=models.ScriptVersion.objects.prefetch_related("tags")
@@ -1622,7 +1622,7 @@ class ServerQueueView(LoginRequiredMixin, PermissionRequiredMixin, generic.ListV
         # the oldest 25 rows put it on the last page.
         return (
             models.ScriptVersion.objects.filter(**criteria)
-            .select_related("script", "script__owner")
+            .select_related("script", "script__owner", "script__imported_by")
             .order_by("-created")
         )
 
