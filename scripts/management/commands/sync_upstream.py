@@ -2,10 +2,11 @@
 
 Safe to run on a timer: it only ever adds versions upstream has and this instance does
 not. Each linked script costs the source one request, for its list of version numbers,
-and two more for each version newer than the newest held here: the version and its PDF.
-A source that refuses a request is not asked anything else for the rest of the run.
+and two more when the source's latest version is newer than the newest held here: that
+version and its PDF. Versions published in between are skipped. A source that refuses a
+request is not asked anything else for the rest of the run.
 
-`--full --script <id>` also fills in older versions missing from one script, the way a
+`--full --script <id>` fetches every version missing from one script instead, the way a
 first import does. It is deliberately one script at a time.
 """
 
@@ -26,7 +27,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--full",
             action="store_true",
-            help="Fetch every version missing here, not only newer ones. Needs --script.",
+            help="Fetch every version missing here, not only the latest. Needs --script.",
         )
         parser.add_argument(
             "--dry-run",

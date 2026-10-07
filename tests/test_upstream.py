@@ -7,6 +7,7 @@ from scripts.upstream import (
     NotOwner,
     UpstreamClient,
     UpstreamError,
+    _latest_of,
     _select_versions,
     _target_script,
     import_script,
@@ -134,8 +135,7 @@ OFFERED = {"1.10.0": "u10", "1.0.0": "u0", "1.9.0": "u9"}
 
 def test_with_nothing_held_the_whole_history_is_wanted_oldest_first():
     # By version ordering, not as given and not lexicographically: 1.10.0 is newest.
-    for only_newer in (False, True):
-        assert _select_versions(OFFERED, [], only_newer) == ([("1.0.0", "u0"), ("1.9.0", "u9"), ("1.10.0", "u10")], 0)
+    assert _select_versions(OFFERED, []) == ([("1.0.0", "u0"), ("1.9.0", "u9"), ("1.10.0", "u10")], 0)
 
 
 def test_versions_already_held_are_not_fetched_again():
@@ -146,15 +146,36 @@ def test_held_versions_compare_by_value_not_spelling():
     assert _select_versions({"1.0": "u"}, ["1.0.0"]) == ([], 1)
 
 
-def test_only_newer_wants_nothing_older_than_the_newest_held():
-    # 1.9.0 is missing here, but older than 1.10.0: filling that gap is a full sync's job.
-    assert _select_versions(OFFERED, ["1.0.0", "1.10.0"], only_newer=True) == ([], 2)
+def test_latest_only_skips_the_versions_published_in_between():
+    # Three releases since the last sync, and only the newest is fetched: the two between
+    # are what a full sync is for.
+    offered = {**OFFERED, "2.0.0": "u20"}
+    assert _select_versions(offered, ["1.0.0"], latest="2.0.0") == ([("2.0.0", "u20")], 1)
+
+
+def test_latest_only_wants_nothing_when_the_newest_is_already_held():
+    # 1.9.0 is missing here, but the latest is held: filling that gap is a full sync's job.
+    assert _select_versions(OFFERED, ["1.0.0", "1.10.0"], latest="1.10.0") == ([], 2)
     assert _select_versions(OFFERED, ["1.0.0", "1.10.0"]) == ([("1.9.0", "u9")], 2)
 
 
-def test_only_newer_takes_every_version_above_the_newest_held():
-    offered = {**OFFERED, "2.0.0": "u20"}
-    assert _select_versions(offered, ["1.9.0"], only_newer=True) == ([("1.10.0", "u10"), ("2.0.0", "u20")], 1)
+def test_latest_only_wants_nothing_older_than_the_newest_held():
+    # Flagged latest there, but this instance already has something newer.
+    assert _select_versions(OFFERED, ["1.10.0"], latest="1.9.0") == ([], 1)
+
+
+def test_latest_only_with_nothing_held_takes_just_the_latest():
+    assert _select_versions(OFFERED, [], latest="1.10.0") == ([("1.10.0", "u10")], 0)
+
+
+def test_latest_of_prefers_the_version_the_source_flags():
+    assert _latest_of(OFFERED, declared_url="u9") == "1.9.0"
+
+
+def test_latest_of_falls_back_to_the_highest_version():
+    # Highest by version ordering, not lexicographically: 1.10.0 beats 1.9.0.
+    assert _latest_of(OFFERED) == "1.10.0"
+    assert _latest_of(OFFERED, declared_url="not one of them") == "1.10.0"
 
 
 def test_a_version_number_this_instance_cannot_store_is_an_upstream_error():
@@ -578,15 +599,20 @@ def test_the_import_page_refuses_while_uploads_are_disabled(settings):
 class ServingClient:
     """An upstream holding one script, recording every request made of it."""
 
-    def __init__(self, *numbers):
+    def __init__(self, *numbers, flagged=None):
         self.numbers = list(numbers)
+        self.flagged = flagged
         self.asked = []
+
+    def _url(self, number):
+        return f"/api/scripts/{self.numbers.index(number)}/"
 
     def script(self, upstream_id):
         self.asked.append("script")
         return {
             "name": "Sects and Violets",
-            "versions": {number: f"/api/scripts/{i}/" for i, number in enumerate(self.numbers)},
+            "versions": {number: self._url(number) for number in self.numbers},
+            "latest_version": self._url(self.flagged) if self.flagged else None,
         }
 
     def version(self, url):
@@ -637,7 +663,7 @@ def test_routine_sync_costs_one_request_when_nothing_is_new(held_here):
     assert held_here.checked == 1
 
 
-def test_routine_sync_fetches_only_what_is_newer_than_the_newest_held(held_here):
+def test_routine_sync_fetches_a_newer_latest_version(held_here):
     from scripts.upstream import sync_script
 
     held_here.versions = ["1.0.0", "1.1.0"]
@@ -649,18 +675,43 @@ def test_routine_sync_fetches_only_what_is_newer_than_the_newest_held(held_here)
     assert held_here.written == ["1.2.0"]
 
 
-def test_routine_sync_leaves_an_older_gap_and_a_full_sync_fills_it(held_here):
+def test_routine_sync_takes_only_the_latest_of_several_new_versions(held_here):
+    from scripts.upstream import sync_script
+
+    held_here.versions = ["1.0.0"]
+    client = ServingClient("1.0.0", "1.1.0", "1.2.0", "1.3.0")
+
+    sync_script(held_here.script, client=client)
+
+    # Three requests however many versions came out since the last run.
+    assert client.asked == ["script", "version 1.3.0", "pdf 1.3.0"]
+    assert held_here.written == ["1.3.0"]
+
+
+def test_routine_sync_follows_the_version_the_source_flags_as_latest(held_here):
+    from scripts.upstream import sync_script
+
+    held_here.versions = ["1.0.0"]
+    client = ServingClient("1.0.0", "1.1.0", "2.0.0", flagged="1.1.0")
+
+    sync_script(held_here.script, client=client)
+
+    assert held_here.written == ["1.1.0"]
+
+
+def test_routine_sync_leaves_gaps_and_a_full_sync_fills_them(held_here):
     from scripts.upstream import sync_script
 
     held_here.versions = ["1.0.0", "2.0.0"]
 
-    routine = ServingClient("1.0.0", "1.5.0", "2.0.0")
+    routine = ServingClient("1.0.0", "1.5.0", "2.0.0", "2.1.0", "2.2.0")
     sync_script(held_here.script, client=routine)
-    assert routine.asked == ["script"]
+    assert routine.asked == ["script", "version 2.2.0", "pdf 2.2.0"]
 
-    full = ServingClient("1.0.0", "1.5.0", "2.0.0")
+    held_here.versions.append("2.2.0")
+    full = ServingClient("1.0.0", "1.5.0", "2.0.0", "2.1.0", "2.2.0")
     sync_script(held_here.script, client=full, full=True)
-    assert full.asked == ["script", "version 1.5.0", "pdf 1.5.0"]
+    assert full.asked == ["script", "version 1.5.0", "pdf 1.5.0", "version 2.1.0", "pdf 2.1.0"]
 
 
 def test_a_first_import_takes_the_whole_history_oldest_first(held_here):

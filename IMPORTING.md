@@ -52,14 +52,16 @@ arrives `offline`, so a sync never changes what the Discord bot serves until som
 the version on the server.
 
 **What a sync costs the other server.** For each linked script, sync asks the source for
-one thing: the script's list of version numbers. It compares that with the newest version
-held here, and only when the source has a **newer** one does it fetch that version and its
-PDF. So a script with nothing new costs one request per run, however long its history, and
-a new version costs two more.
+one thing: the script's list of version numbers. It compares the source's **latest** version
+with the newest held here, and only when the source's is newer does it fetch that one
+version and its PDF. So a script with nothing new costs one request per run, however long
+its history, and a script with something new costs three, however many versions came out
+since the last run.
 
-Routine sync deliberately looks only forward. A version missing from further back in the
-history, older than the newest held here, is left alone. To fill such gaps, run a full sync
-for that script by hand, which fetches every version missing here, as a first import does:
+Routine sync deliberately takes the latest version only. Versions published between two
+runs, and any missing from further back, are left alone. To fill those gaps, run a full
+sync for that script by hand, which fetches every version missing here, as a first import
+does:
 
 ```sh
 docker compose exec botc-scripts python manage.py sync_upstream --full --script 12
@@ -80,7 +82,7 @@ Useful flags:
 |---|---|
 | `--dry-run` | List what would be synced, write nothing |
 | `--script <id>` | Sync one local script, whether or not sync is enabled for it |
-| `--full` | With `--script`, fetch every version missing here, not only newer ones |
+| `--full` | With `--script`, fetch every version missing here, not only the latest |
 
 Import without linking, if you want a one-time copy that sync will ignore:
 

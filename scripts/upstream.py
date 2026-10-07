@@ -250,19 +250,29 @@ def _held_versions(script):
     return list(script.versions.values_list("version", flat=True))
 
 
-def _select_versions(available, held, only_newer=False):
+def _latest_of(available, declared_url=None):
+    """The source's latest version number: the one it flags as latest, else the highest."""
+    for number, url in available.items():
+        if declared_url and url == declared_url:
+            return number
+    return max(available, key=_version)
+
+
+def _select_versions(available, held, latest=None):
     """Which of the source's versions to fetch, oldest first, and how many are held here.
 
     ``available`` is the source's {version number: url} and ``held`` the numbers this
-    instance already has. Everything not held is wanted, unless ``only_newer``, when only
-    versions newer than the newest held are: a gap further back in the history is left
-    for a full sync to fill. With nothing held, the whole history is wanted either way.
+    instance already has. Everything not held is wanted, unless ``latest`` names the
+    source's latest version: then that one alone is, and only if it is newer than the
+    newest held. Versions it skips, between the two or further back, are a full sync's.
     """
     held = {_version(number) for number in held}
     offered = sorted(((_version(number), number, url) for number, url in available.items()), key=lambda o: o[0])
-    newest = max(held) if only_newer and held else None
+    newest = max(held) if held else None
     wanted = [
-        (number, url) for parsed, number, url in offered if parsed not in held and (newest is None or parsed > newest)
+        (number, url)
+        for parsed, number, url in offered
+        if parsed not in held and (latest is None or (number == latest and (newest is None or parsed > newest)))
     ]
     already_held = sum(1 for parsed, _, _ in offered if parsed in held)
     return wanted, already_held
@@ -333,13 +343,14 @@ def import_script(
     client=None,
     user=None,
     enforce_owner=True,
-    only_newer=False,
+    latest_only=False,
 ):
     """Import a script from upstream by id or URL.
 
     Takes every version the source has and this instance does not, so a first import
-    brings the script's whole history. ``only_newer`` narrows that to versions newer than
-    the newest held here, which is all routine sync asks for; see ``sync_script``.
+    brings the script's whole history. ``latest_only`` narrows that to the source's latest
+    version, when it is newer than the newest held here, which is all routine sync asks
+    for; see ``sync_script``.
 
     Returns (script, imported, skipped) where imported is the list of ScriptVersions
     created and skipped counts the source's versions already held locally. ``user`` is
@@ -358,7 +369,8 @@ def import_script(
 
     # Decided from the version list the source has already sent, so a version held here
     # costs it nothing: only what is actually wanted is fetched, two requests apiece.
-    wanted, skipped = _select_versions(versions, _held_versions(script), only_newer)
+    latest = _latest_of(versions, detail.get("latest_version")) if latest_only else None
+    wanted, skipped = _select_versions(versions, _held_versions(script), latest)
     if not wanted:
         # import_version records the check when it runs; nothing else will this time.
         _record_check(script, source, upstream_id, link)
@@ -390,10 +402,11 @@ def sync_script(script, client=None, full=False):
     """Pull versions upstream has that this script does not.
 
     Routine sync asks the source for one thing, the script's list of version numbers,
-    and fetches a version and its PDF only when its number is newer than the newest held
-    here. A script with nothing new costs the source a single request.
+    and fetches the source's latest version and its PDF only when that is newer than the
+    newest held here. A script with nothing new costs the source a single request, and one
+    with something new three, however many versions it published since the last run.
 
-    ``full`` also fills in older versions missing here, the way a first import does. It
+    ``full`` instead fetches every version missing here, the way a first import does. It
     is for running by hand against one script: `sync_upstream --full --script <id>`.
 
     Returns the list of ScriptVersions created, which is empty when already in step.
@@ -408,7 +421,7 @@ def sync_script(script, client=None, full=False):
             client=client,
             # Sync follows scripts already linked to their source, and runs as the system.
             enforce_owner=False,
-            only_newer=not full,
+            latest_only=not full,
         )
     return imported
 
