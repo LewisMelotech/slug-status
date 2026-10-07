@@ -2,10 +2,10 @@
 
 Safe to run on a timer: it only ever adds versions botcscripts.com has and this instance
 does not. It reads botcscripts.com's list of versions once, newest first, down to the
-newest version seen on the last run: usually one request. Every row read is stored for
-imports to use, and every new version of a linked script is added; the only other
-requests are their PDFs, once each. This is the approach botcscripts.com's maintainer
-asked for, and once a day is the most it should run.
+newest version seen on the last run: usually one request, and nothing else. Every row read
+is stored for imports to use, and every new version of a linked script is added from it,
+without a PDF, since botcscripts.com does not permit downloading them. This is the
+approach its maintainer asked for, and once a day is the most it should run.
 
 `--script <id>` checks one script by itself instead, and `--full --script <id>` fetches
 every version missing from it, the way a first import does. Both are for running by hand.

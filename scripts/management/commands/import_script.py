@@ -1,4 +1,4 @@
-"""Import a script from botcscripts.com: every version, PDFs and all."""
+"""Import a script from botcscripts.com: every version, without PDFs, which it does not permit."""
 
 from django.core.management.base import BaseCommand, CommandError
 
@@ -44,8 +44,7 @@ class Command(BaseCommand):
                 continue
 
             for version in imported:
-                pdf = "with PDF" if version.pdf else "no PDF"
-                self.stdout.write(self.style.SUCCESS(f"imported: {script.name} {version.version} ({pdf})"))
+                self.stdout.write(self.style.SUCCESS(f"imported: {script.name} {version.version}"))
             if skipped:
                 self.stdout.write(f"already held: {skipped} version(s) of {script.name}")
             if not imported and not skipped:

@@ -1517,10 +1517,10 @@ class ScriptImportView(generic.FormView):
 
         if imported:
             versions = ", ".join(str(version.version) for version in imported)
-            with_pdf = sum(1 for version in imported if version.pdf)
             messages.success(
                 self.request,
-                f"Imported {script.name} {versions} ({with_pdf} of {len(imported)} with a PDF).",
+                f"Imported {script.name} {versions}, without PDFs: botcscripts.com does not allow those to be "
+                "downloaded, so upload one on a version if it needs it.",
             )
         if skipped:
             messages.info(self.request, f"{skipped} version(s) were already here and were left alone.")

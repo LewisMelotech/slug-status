@@ -73,31 +73,17 @@ def test_parse_reference_rejects_input_without_an_id(reference):
 
 
 def test_client_replaces_the_sessions_default_user_agent():
-    # botcscripts.com answers the python-requests User-Agent with a 403 on the PDF
-    # download path, and a Session always carries one, so it must be overwritten
-    # rather than defaulted.
+    # botcscripts.com's maintainer identifies callers by User-Agent, and a Session always
+    # carries python-requests', so it must be overwritten rather than defaulted.
     session = FakeSession()
     client = UpstreamClient(session=session)
     assert "python-requests" not in client.session.headers["User-Agent"]
 
 
-def test_pdf_returns_the_body_when_it_is_a_pdf():
-    session = FakeSession(FakeResponse(200, b"%PDF-1.7 body"))
-    assert UpstreamClient(session=session).pdf(134, "1.0.0") == b"%PDF-1.7 body"
-
-
-@pytest.mark.parametrize(
-    "response",
-    [
-        FakeResponse(500, b"<!DOCTYPE html><html>error</html>"),
-        FakeResponse(404, b""),
-        FakeResponse(200, b"<!DOCTYPE html>not a pdf"),
-    ],
-)
-def test_pdf_returns_none_rather_than_raising_when_there_is_no_pdf(response):
-    # Upstream answers a missing PDF with a 500 and an HTML page, so a non-PDF body
-    # must read as "no PDF" — the JSON is still worth importing without one.
-    assert UpstreamClient(session=FakeSession(response)).pdf(134, "1.0.0") is None
+def test_nothing_here_can_download_a_pdf_from_botcscripts_com():
+    # Its maintainer does not permit programmatic access to PDFs (AdmiralGT/botc-scripts#740),
+    # so the client has no way to ask for one, and imported versions arrive without.
+    assert not any("pdf" in name.lower() for name in dir(UpstreamClient))
 
 
 @pytest.mark.parametrize("code", [403, 429])
@@ -108,16 +94,6 @@ def test_a_refusal_from_the_source_is_blocked_not_a_passing_error(code):
 
     with pytest.raises(Blocked, match=f"HTTP {code}"):
         client.script(134)
-
-
-@pytest.mark.parametrize("code", [403, 429])
-def test_a_refused_pdf_raises_rather_than_reading_as_no_pdf(code):
-    # Read as "no PDF", a version would be stored without the PDF it has, and sync,
-    # which only fetches versions it does not hold, would never go back for it.
-    client = UpstreamClient(session=FakeSession(FakeResponse(code, b"<html>blocked</html>")))
-
-    with pytest.raises(Blocked):
-        client.pdf(134, "1.0.0")
 
 
 def test_blocked_is_an_upstream_error_so_the_page_and_api_report_it():
@@ -574,8 +550,7 @@ class ServingClient:
         return self.row(number)
 
     def pdf(self, upstream_id, version):
-        # No PDF: what is under test is that it was asked for, not what came back.
-        self.asked.append(f"pdf {version}")
+        raise AssertionError("botcscripts.com does not permit PDFs to be downloaded")
 
 
 @pytest.fixture
@@ -641,7 +616,7 @@ def test_checking_one_script_fetches_a_newer_latest_version(held_here):
 
     sync_script(held_here.script, client=client)
 
-    assert client.asked == ["script", "version 1.2.0", "pdf 1.2.0"]
+    assert client.asked == ["script", "version 1.2.0"]
     assert held_here.written == ["1.2.0"]
 
 
@@ -654,7 +629,7 @@ def test_checking_one_script_takes_only_the_latest_of_several_new_versions(held_
     sync_script(held_here.script, client=client)
 
     # Three requests however many versions came out since the last run.
-    assert client.asked == ["script", "version 1.3.0", "pdf 1.3.0"]
+    assert client.asked == ["script", "version 1.3.0"]
     assert held_here.written == ["1.3.0"]
 
 
@@ -676,12 +651,12 @@ def test_checking_one_script_leaves_gaps_and_a_full_sync_fills_them(held_here):
 
     routine = ServingClient("1.0.0", "1.5.0", "2.0.0", "2.1.0", "2.2.0")
     sync_script(held_here.script, client=routine)
-    assert routine.asked == ["script", "version 2.2.0", "pdf 2.2.0"]
+    assert routine.asked == ["script", "version 2.2.0"]
 
     held_here.versions.append("2.2.0")
     full = ServingClient("1.0.0", "1.5.0", "2.0.0", "2.1.0", "2.2.0")
     sync_script(held_here.script, client=full, full=True)
-    assert full.asked == ["script", "version 1.5.0", "pdf 1.5.0", "version 2.1.0", "pdf 2.1.0"]
+    assert full.asked == ["script", "version 1.5.0", "version 2.1.0"]
 
 
 def test_a_first_import_takes_the_whole_history_oldest_first(held_here):
@@ -692,7 +667,7 @@ def test_a_first_import_takes_the_whole_history_oldest_first(held_here):
     assert held_here.written == ["1.0.0", "1.9.0", "1.10.0"]
     assert [version.version for version in imported] == held_here.written
     assert skipped == 0
-    assert len(client.asked) == 1 + 2 * 3
+    assert client.asked == ["script", "version 1.0.0", "version 1.9.0", "version 1.10.0"]
 
 
 def test_importing_again_fetches_only_what_is_missing(held_here):
@@ -701,20 +676,20 @@ def test_importing_again_fetches_only_what_is_missing(held_here):
 
     _, _, skipped = import_script("134", client=client, user=None)
 
-    assert client.asked == ["script", "version 1.2.0", "pdf 1.2.0"]
+    assert client.asked == ["script", "version 1.2.0"]
     assert skipped == 2
 
 
 # --- An import served from what the daily read stored -----------------------------------
 
 
-def test_an_import_takes_stored_versions_from_the_store_and_fetches_only_their_pdfs(held_here):
+def test_an_import_of_stored_versions_costs_one_request(held_here):
     client = ServingClient("1.0.0", "1.1.0")
     held_here.stored = {pk: client.row(number) for pk, number in enumerate(client.numbers)}
 
     import_script("134", client=client, user=None)
 
-    assert client.asked == ["script", "pdf 1.0.0", "pdf 1.1.0"]
+    assert client.asked == ["script"]
     assert held_here.written == ["1.0.0", "1.1.0"]
     assert held_here.early_reads == 0
 
@@ -732,7 +707,7 @@ def test_a_version_newer_than_the_daily_read_sends_it_early_once(held_here):
     import_script("134", client=client, user=None)
 
     assert held_here.early_reads == 1
-    assert client.asked == ["script", "pdf 1.0.0", "pdf 1.1.0"]
+    assert client.asked == ["script"]
 
 
 def test_a_version_older_than_the_daily_read_is_looked_up_and_stored(held_here):
@@ -743,13 +718,13 @@ def test_a_version_older_than_the_daily_read_is_looked_up_and_stored(held_here):
     import_script("134", client=client, user=None)
 
     assert held_here.early_reads == 0
-    assert client.asked == ["script", "version 1.0.0", "pdf 1.0.0", "pdf 1.1.0"]
+    assert client.asked == ["script", "version 1.0.0"]
     assert 0 in held_here.stored
 
 
 def test_what_the_early_read_added_itself_is_not_fetched_again(held_here):
-    # A linked script: the early read adds its new version, PDF and all, so the import
-    # must not download that PDF a second time.
+    # A linked script: the early read adds its new version itself, so the import must
+    # not add it a second time.
     held_here.versions = ["1.0.0"]
     client = ServingClient("1.0.0", "1.1.0")
     held_here.cursor = 0
@@ -934,7 +909,7 @@ class FeedClient:
         return {"results": rows, "next": f"?page={page + 1}" if page < len(self.pages) else None}
 
     def pdf(self, script_id, version):
-        self.asked.append(f"pdf {script_id} {version}")
+        raise AssertionError("botcscripts.com does not permit PDFs to be downloaded")
 
 
 @pytest.fixture
@@ -1003,7 +978,7 @@ def test_a_sync_with_nothing_new_costs_one_request(feed):
     assert feed.cursor == 110
 
 
-def test_every_new_version_of_a_linked_script_is_added_oldest_first_with_its_pdf(feed):
+def test_every_new_version_of_a_linked_script_is_added_oldest_first_from_its_row(feed):
     from scripts.upstream import sync_source
 
     feed.cursor = 100
@@ -1013,10 +988,11 @@ def test_every_new_version_of_a_linked_script_is_added_oldest_first_with_its_pdf
 
     result = sync_source(client=client)
 
-    # Both new versions, so the newer takes the latest flag; one PDF each, once. Script 1 is
-    # not linked here and costs nothing beyond the page it was on.
+    # Both new versions, so the newer takes the latest flag, and nothing asked beyond the
+    # page: each comes from its row, with no PDF. Script 1 is not linked here, and is
+    # passed over.
     assert feed.written == [(2, "1.1.0"), (2, "1.2.0")]
-    assert client.asked == ["page 1", "pdf 2 1.1.0", "pdf 2 1.2.0"]
+    assert client.asked == ["page 1"]
     assert [version.version for version in result.imported] == ["1.1.0", "1.2.0"]
 
 

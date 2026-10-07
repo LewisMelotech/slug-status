@@ -3,7 +3,9 @@
 Only the official site is imported from. Its maintainer has said how its API may be used
 (AdmiralGT/botc-scripts#740), and the sync here is built to that; another instance would
 have no such agreement, and supporting one meant a source to carry through every step.
-Only the public read endpoints are used, so no credentials are needed there.
+Only the public read endpoints are used, so no credentials are needed there. PDFs are never
+fetched: the site does not permit programmatic access to them, so an imported or synced
+version arrives without one, and a PDF can be uploaded for it here by hand.
 """
 
 import logging
@@ -11,7 +13,6 @@ from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 import requests
-from django.core.files.base import ContentFile
 from django.db import transaction
 from django.utils import timezone
 from versionfield import Version
@@ -73,9 +74,9 @@ class UpstreamClient:
         self.source = SOURCE
         self.timeout = timeout
         self.session = session or requests.Session()
-        # Assigned, not setdefault: a Session always carries a python-requests
-        # User-Agent already, which botcscripts.com answers with a 403 on the PDF
-        # download path, so setdefault would leave the blocked value in place.
+        # Assigned, not setdefault: a Session always carries a python-requests User-Agent
+        # already, and botcscripts.com's maintainer identifies callers by it, so this one
+        # has to replace it rather than sit behind it.
         self.session.headers["User-Agent"] = USER_AGENT
 
     def _get(self, path, **kwargs):
@@ -130,22 +131,6 @@ class UpstreamClient:
         payload = self._json(f"/api/scripts/?format=json&search={requests.utils.quote(query)}")
         results = payload.get("results", []) if isinstance(payload, dict) else []
         return results[:limit]
-
-    def pdf(self, script_id, version):
-        """The version's PDF, or None when upstream has none.
-
-        Upstream answers a missing PDF with a 500 carrying an HTML page rather than a
-        404, so anything that is not a PDF body is treated as 'no PDF' instead of an
-        error — importing the JSON is still worthwhile when the PDF is absent. Being
-        refused is the exception: that raises, so a version is not stored without a PDF
-        it does have just because the source had stopped answering us.
-        """
-        response = self._get(f"/script/{script_id}/{version}/download_pdf")
-        if response.status_code in BLOCKED_STATUSES:
-            raise self._blocked(response)
-        if response.status_code != 200 or not response.content.startswith(b"%PDF"):
-            return None
-        return response.content
 
 
 def url_of(response):
@@ -260,7 +245,7 @@ def _select_versions(available, held, latest=None):
 
 
 @transaction.atomic
-def import_version(row, pdf=None, link=True, user=None, enforce_owner=True):
+def import_version(row, link=True, user=None, enforce_owner=True):
     """Create one ScriptVersion from an upstream version row.
 
     Returns the new ScriptVersion, or None when that version is already held locally.
@@ -308,8 +293,6 @@ def import_version(row, pdf=None, link=True, user=None, enforce_owner=True):
         **_counts(content),
     )
 
-    if pdf:
-        script_version.pdf.save(f"{name}.pdf", ContentFile(pdf), save=True)
     if inherited_tags:
         script_version.tags.add(*inherited_tags.all())
 
@@ -333,8 +316,9 @@ def import_script(
     The source is asked for the script's list of versions, then each wanted version's
     content comes from the rows the daily sync has stored where it can. If one missing
     from them is newer than where that read has got to, the read runs now, once, since it
-    would find it. Anything older is a lookup of that one version. Then each version's PDF.
-    A new script whose versions are all stored costs one request plus one per PDF.
+    would find it. Anything older is a lookup of that one version. No PDF is fetched, which
+    botcscripts.com does not permit, so a new script whose versions are all stored costs one
+    request in all.
 
     Returns (script, imported, skipped) where imported is the list of ScriptVersions
     created and skipped counts the source's versions already held locally. ``user`` is
@@ -347,8 +331,8 @@ def import_script(
     if not versions:
         raise UpstreamError(f"Script {upstream_id} on {SOURCE} has no versions to import.")
 
-    # Refused here, before anything else is fetched: every version and its PDF is a request
-    # to someone else's server, and a refusal does not need any of them.
+    # Refused here, before anything else is fetched: a version not stored is a request to
+    # someone else's server, and a refusal does not need any of them.
     script, _ = _target_script(upstream_id, detail.get("name"), user, enforce_owner)
 
     # Decided from the version list the source has already sent, so a version held here
@@ -381,8 +365,7 @@ def import_script(
                 # Older than anything the daily read has seen: a lookup of this one version.
                 row = client.version(url)
                 _store_rows([row])
-            pdf = client.pdf(upstream_id, row.get("version") or version_number)
-            created = import_version(row, pdf=pdf, link=link, user=user, enforce_owner=enforce_owner)
+            created = import_version(row, link=link, user=user, enforce_owner=enforce_owner)
             if created is None:
                 # Arrived here by another route since the list was compared.
                 skipped += 1
@@ -402,9 +385,9 @@ def sync_script(script, client=None, full=False):
 
     This is a lookup of one known script, not the scheduled sync, which is ``sync_source``.
     It asks the source for the script's list of version numbers and fetches the latest
-    version and its PDF only when that is newer than the newest held here: one request when
-    nothing is new, three when something is. ``full`` instead fetches every version missing
-    here, the way a first import does.
+    version only when that is newer than the newest held here and not already stored: one
+    request when nothing is new, two at most when something is. ``full`` instead fetches
+    every version missing here, the way a first import does.
 
     Returns the list of ScriptVersions created, which is empty when already in step.
     """
@@ -446,8 +429,8 @@ def sync_source(client=None):
     versions newest first, and version ids there only ever increase. So reading it page by
     page until reaching the newest id seen last time finds every version published since,
     usually in one request. Each row carries its content: every one read is stored, for
-    imports to be served from, and every new version of a script linked here is added. The
-    only other request is each added version's PDF, once.
+    imports to be served from, and every new version of a script linked here is added from
+    its row. Nothing else is asked for: no PDFs, which botcscripts.com does not permit.
 
     With no cursor yet, only the first page is read, and the cursor starts from there: there
     is nothing to say how far back to look. Versions published before that are for
@@ -481,7 +464,6 @@ def sync_source(client=None):
     else:
         result.limited = True
 
-    # Kept before anything is added, so a refusal partway through the PDFs loses none of it.
     _store_rows(seen)
 
     with notifications.attributed("Synced", user=None, origin=SOURCE), notifications.batched():
@@ -495,10 +477,7 @@ def sync_source(client=None):
                 wanted, _ = _select_versions({version: None}, _held_versions(script))
                 if not wanted:
                     continue
-                pdf = client.pdf(row["script_id"], version)
-                created = import_version(row, pdf=pdf, link=True, enforce_owner=False)
-            except Blocked:
-                raise
+                created = import_version(row, link=True, enforce_owner=False)
             except UpstreamError as exc:
                 result.failed.append(f"{script.name} {version}: {exc}")
                 continue

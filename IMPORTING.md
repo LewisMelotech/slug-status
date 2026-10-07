@@ -21,8 +21,11 @@ docker compose exec botc-scripts python manage.py import_script https://www.botc
 
 Both forms are equivalent. A link has to be to botcscripts.com, with or without `www.`.
 
-What comes across: the script name, author, version, script type, the JSON content, and
-the PDF when upstream has one. Character counts, edition and homebrew status are
+What comes across: the script name, author, version, script type and the JSON content.
+**PDFs do not**: botcscripts.com does not permit programmatic access to them, so an imported
+or synced version arrives without one. Upload one on the version in the admin if it needs
+it; until then the Discord bot's `/script` has no pages to show for it, and `/json` still
+works. Character counts, edition and homebrew status are
 recalculated locally by the same code the upload form uses, so an imported script is
 stored like an uploaded one, and adding to an existing script follows the same
 [ownership rule](#who-may-import-into-an-existing-script).
@@ -35,13 +38,10 @@ first, so the newest ends up with the `latest` flag. What it asks the source:
    [Staying linked](#staying-linked)), which costs nothing. If one missing from them is
    newer than where that read has got to, the read runs now, once, and finds it. One older
    than that is looked up by itself, from `/api/scripts/<version id>/`, and stored too.
-3. Each version's PDF. One download per version, once.
+So a new script whose versions are all stored costs **one request**, however many versions
+it has. A version that has to be looked up adds one.
 
-So a new script whose versions are all stored costs one request plus its PDFs: three
-versions, four requests. A version that has to be looked up adds one.
-
-Importing is idempotent. A version already held here is never fetched again, nor its PDF,
-so re-running asks the source for the version list only, reports `already held`, and
+Importing is idempotent. A version already held here is never fetched again, so re-running asks the source for the version list only, reports `already held`, and
 writes nothing.
 
 ## Staying linked
@@ -75,9 +75,8 @@ hybrid and homebrew scripts. Sync asks for all of them, so a script that gained 
 since the last run gets both, and no linked script is missed for how it is classified.
 
 So a run costs the source one request per 50 versions published since the last run, which
-for a daily run is normally **one request**, however many scripts are linked here. The only
-other request is one PDF for each new version of a linked script, downloaded once, when the
-version arrives. A version already held here is never downloaded again, nor is its PDF.
+for a daily run is normally **one request**, however many scripts are linked here, and
+nothing else: each new version is added from its row, without a PDF.
 
 A few things follow from reading the list rather than each script:
 
@@ -235,7 +234,7 @@ script that merely shares a name with yours would add versions to yours and then
 to the source, so sync kept adding to it afterwards.
 
 A refusal is shown on the import page, and is a `403` from the API. It is decided as soon
-as the source has said what the script is called, before any version or PDF is fetched, so
+as the source has said what the script is called, before any version is fetched, so
 it costs the other server one request.
 
 `manage.py import_script` and `sync_upstream` are not held to it: they run as whoever
@@ -285,12 +284,10 @@ the first sync, plus whatever imports have looked up.
   ordering and styling of their own), and comments and votes belong to accounts on the
   other instance. Only the inheritable tags of a script's own previous version carry
   forward, exactly as on upload.
-- **Upstream cannot distinguish "no PDF" from "server error"** — it answers both with a
-  500 carrying an HTML page. A version whose PDF cannot be fetched is imported without
-  one rather than failing, and `import_script` reports `no PDF` so you can tell.
-- **The public site rejects the `python-requests` User-Agent** with a 403 on the PDF
-  download path. The client sets its own; do not remove it or PDFs will silently stop
-  importing while the JSON keeps working.
+- **No PDFs.** botcscripts.com does not permit programmatic access to them, and its
+  `download_pdf` link is not to be used by programs. Nothing here fetches one.
+- **The client identifies itself** with its own User-Agent rather than `python-requests`'.
+  botcscripts.com's maintainer tells callers apart by it, so keep it.
 - **The public site blocks instances that ask too much.** Keep sync to once a day,
   and see [When the source refuses](#staying-linked) for what happens once it does.
 - **Nothing is pushed back.** This is a one-way copy: votes, comments and edits made here
