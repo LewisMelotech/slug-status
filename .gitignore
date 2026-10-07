@@ -141,3 +141,6 @@ dmypy.json
 
 # poetry
 .poetry
+
+# macOS Finder
+.DS_Store
