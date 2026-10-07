@@ -51,37 +51,57 @@ would; older versions file in behind without disturbing it. Like every upload, w
 arrives `offline`, so a sync never changes what the Discord bot serves until someone puts
 the version on the server.
 
-**What a sync costs the other server.** For each linked script, sync asks the source for
-one thing: the script's list of version numbers. It compares the source's **latest** version
-with the newest held here, and only when the source's is newer does it fetch that one
-version and its PDF. So a script with nothing new costs one request per run, however long
-its history, and a script with something new costs three, however many versions came out
-since the last run.
+**How it asks.** This is the approach the botcscripts.com maintainer asked for (see
+[discussion #740](https://github.com/AdmiralGT/botc-scripts/discussions/740)), after this
+instance was blocked for looking every linked script up one at a time.
 
-Routine sync deliberately takes the latest version only. Versions published between two
-runs, and any missing from further back, are left alone. To fill those gaps, run a full
-sync for that script by hand, which fetches every version missing here, as a first import
-does:
+`/api/scripts/` lists the latest version of every script, newest first, 50 to a page, and
+version ids there only ever go up. Sync reads that list from the top until it reaches the
+newest version id it saw on the previous run. Everything above that line is a script that
+has gained a version since, and any of them linked here is brought up to date from the row
+itself, which carries the script's content. It then remembers the newest id it saw, in an
+**Upstream cursor** row you can see in the admin.
+
+So a run costs the source one request per 50 scripts that changed since the last run,
+which for a daily run is normally **one request**, however many scripts are linked here.
+The only other requests are the PDFs of new versions of linked scripts. The list leaves
+out hybrid and homebrew scripts unless asked, so sync asks for both.
+
+A few things follow from reading the list rather than each script:
+
+- **Only the latest version comes across.** If a script gained two versions since the last
+  run, the list only shows the newer one. Older versions missing here are left alone.
+- **The first run reads one page.** With no cursor yet, there is nothing to say how far
+  back to look, so sync reads the newest page and starts the cursor from there.
+- **A long gap is capped.** A run reads at most 20 pages (a thousand changed scripts) and
+  says so if it stopped there. To look further back, lower `last_version_pk` on the cursor
+  in the admin before the next run, at a request per 50 scripts.
+
+To fill in what any of that left out for one script, check it by itself. That is a lookup
+of one known script, by hand, through `/api/script_ids/<id>/`: one request when nothing is
+new, plus two for each version fetched.
 
 ```sh
+docker compose exec botc-scripts python manage.py sync_upstream --script 12
 docker compose exec botc-scripts python manage.py sync_upstream --full --script 12
 ```
 
-`--full` only works with `--script`, so a full pass over every linked script cannot be
-started by accident. `12` is the script's id **here**, as shown in the admin.
+Without `--full` that takes the latest version if it is newer than anything held here; with
+it, every version missing here, as a first import does. `--full` only works with
+`--script`. `12` is the script's id **here**, as shown in the admin. Do not loop these over
+every linked script: that is the pattern that got this instance blocked.
 
 **When the source refuses.** botcscripts.com blocks an instance that asks it too much,
 answering `403`, and the block stays until it is lifted by hand. A refusal (`403` or `429`)
-stops the run asking that source anything else: the remaining scripts from it are reported
-as `not checked` rather than each sending a request that would be refused too. While
-blocked, stop the stack's `sync` service with `docker compose stop sync`.
+ends that source's run without moving its cursor, so the next run starts from the same
+place. While blocked, stop the stack's `sync` service with `docker compose stop sync`.
 
 Useful flags:
 
 | Flag | Effect |
 |---|---|
-| `--dry-run` | List what would be synced, write nothing |
-| `--script <id>` | Sync one local script, whether or not sync is enabled for it |
+| `--dry-run` | Say how far each source would be read, without asking it anything |
+| `--script <id>` | Check one local script by itself, whether or not sync is enabled for it |
 | `--full` | With `--script`, fetch every version missing here, not only the latest |
 
 Import without linking, if you want a one-time copy that sync will ignore:
@@ -224,8 +244,10 @@ never needs the command line for this.
 ## In the admin
 
 Linked scripts show their upstream id, sync state and last sync time in the script list,
-where `sync_enabled` is editable inline. Select any number of scripts and use the **Sync
-selected scripts from their upstream instance** action to pull immediately.
+where `sync_enabled` is editable inline. The **Check the upstream instance of the selected
+scripts for new versions** action runs the same single read as the scheduled sync, once per
+instance in the selection, so it brings every script linked to that instance up to date,
+not only the ones selected. **Upstream cursors** shows how far each instance has been read.
 
 ## What is stored
 
@@ -240,6 +262,10 @@ Four fields on `Script`:
 
 A unique constraint on `(upstream_source, upstream_id)` means a repeated import updates
 the script it already created rather than forking a second copy.
+
+And one `UpstreamCursor` row per instance synced from: `last_version_pk`, the newest version
+id seen there by the last sync, in that instance's numbering. It is created by the first
+sync, and sync reads down to it next time.
 
 ## Known limits
 

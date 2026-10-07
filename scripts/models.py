@@ -180,6 +180,24 @@ class Script(models.Model):
         ]
 
 
+class UpstreamCursor(models.Model):
+    """How far sync_upstream has read a source's list of its newest versions.
+
+    Version ids only ever increase there, so the newest one seen is all that is needed to
+    know where the next run can stop reading. Lower it to have the next run look further
+    back, at the cost of a request per extra page.
+    """
+
+    source = models.URLField(unique=True, help_text="Base URL of the instance, e.g. https://www.botcscripts.com")
+    last_version_pk = models.IntegerField(
+        help_text="The newest version id seen there, in that instance's numbering, not this one's."
+    )
+    updated = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.source} up to version {self.last_version_pk}"
+
+
 class ScriptVersion(models.Model):
     """
     Actual script model, tracking type, author, JSON, PDF etc.

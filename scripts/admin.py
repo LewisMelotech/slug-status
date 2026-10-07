@@ -43,34 +43,42 @@ class ScriptAdmin(admin.ModelAdmin):
         kwargs.setdefault("form", ScriptAdminForm)
         return super().get_changelist_form(request, **kwargs)
 
-    @admin.action(description="Sync selected scripts from their upstream instance")
+    @admin.action(description="Check the upstream instance of the selected scripts for new versions")
     def sync_now(self, request, queryset):
-        synced = skipped = 0
-        blocked = set()
-        for script in queryset:
-            if script.upstream_source in blocked:
-                self.message_user(request, f"{script}: not synced, its source is refusing requests.", messages.WARNING)
-                continue
+        # One read of each source's newest versions, as the scheduled sync does, rather than a
+        # lookup per selected script: botcscripts.com blocks instances that iterate its API.
+        # That read covers every script linked to the source, not only the selection.
+        sources = sorted(
+            {
+                upstream.normalise_source(script.upstream_source)
+                for script in queryset
+                if script.upstream_source and script.upstream_id and script.sync_enabled
+            }
+        )
+        if not sources:
+            self.message_user(request, "None of the selected scripts has sync enabled.", level=messages.WARNING)
+            return
+        for source in sources:
             try:
-                imported = upstream.sync_script(script)
-            except upstream.Blocked as exc:
-                # Asking it about the rest of the selection would only be refused as well.
-                blocked.add(script.upstream_source)
-                self.message_user(request, f"{script}: {exc}", level=messages.ERROR)
-                continue
+                result = upstream.sync_source(source)
             except upstream.UpstreamError as exc:
-                self.message_user(request, f"{script}: {exc}", level=messages.ERROR)
+                self.message_user(request, f"{source}: {exc}", level=messages.ERROR)
                 continue
-            if imported:
-                synced += len(imported)
-                names = ", ".join(str(version.version) for version in imported)
-                self.message_user(request, f"{script}: imported {names}", level=messages.SUCCESS)
+            for problem in result.failed:
+                self.message_user(request, f"{source}: {problem}", level=messages.ERROR)
+            if result.imported:
+                names = ", ".join(f"{version.script.name} {version.version}" for version in result.imported)
+                self.message_user(request, f"{source}: imported {names}", level=messages.SUCCESS)
             else:
-                skipped += 1
-        if skipped:
-            self.message_user(request, f"{skipped} script(s) were already up to date.", level=messages.INFO)
-        if synced:
-            self.message_user(request, f"{synced} new version(s) in total.", level=messages.SUCCESS)
+                self.message_user(request, f"{source}: every linked script is up to date.", level=messages.INFO)
+
+
+@admin.register(models.UpstreamCursor)
+class UpstreamCursorAdmin(admin.ModelAdmin):
+    """How far sync has read each source. Lower last_version_pk to make the next run look further back."""
+
+    list_display = ["source", "last_version_pk", "updated"]
+    readonly_fields = ["updated"]
 
 
 @admin.action(description="Mark selected versions as live on the Minecraft server")

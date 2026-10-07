@@ -7,6 +7,7 @@ side.
 """
 
 import logging
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 import requests
@@ -144,6 +145,17 @@ class UpstreamClient:
     def version(self, url):
         """One version row: {pk, script_id, name, version, script_type, author, content}."""
         return self._json(url)
+
+    def newest_versions(self, page=1):
+        """One page of the latest version of every script, newest first.
+
+        {count, next, results}, where each result is a version row like ``version`` returns,
+        content and all. Left to its defaults the list leaves out hybrid and homebrew
+        scripts, which can be linked here as well as any other, so it is asked for both.
+        """
+        return self._json(
+            f"/api/scripts/?format=json&ordering=-pk&include_hybrid=true&include_homebrew=true&page={page}"
+        )
 
     def search(self, query, limit=10):
         payload = self._json(f"/api/scripts/?format=json&search={requests.utils.quote(query)}")
@@ -399,15 +411,13 @@ def import_script(
 
 
 def sync_script(script, client=None, full=False):
-    """Pull versions upstream has that this script does not.
+    """Pull versions upstream has that this one script does not, by hand.
 
-    Routine sync asks the source for one thing, the script's list of version numbers,
-    and fetches the source's latest version and its PDF only when that is newer than the
-    newest held here. A script with nothing new costs the source a single request, and one
-    with something new three, however many versions it published since the last run.
-
-    ``full`` instead fetches every version missing here, the way a first import does. It
-    is for running by hand against one script: `sync_upstream --full --script <id>`.
+    This is a lookup of one known script, not the scheduled sync, which is ``sync_source``.
+    It asks the source for the script's list of version numbers and fetches the latest
+    version and its PDF only when that is newer than the newest held here: one request when
+    nothing is new, three when something is. ``full`` instead fetches every version missing
+    here, the way a first import does.
 
     Returns the list of ScriptVersions created, which is empty when already in step.
     """
@@ -426,9 +436,119 @@ def sync_script(script, client=None, full=False):
     return imported
 
 
+# The most pages of the newest-versions list one sync reads. At 50 versions a page that is
+# a thousand new versions, weeks of activity on botcscripts.com. A run that reaches it says
+# so, and the next one carries on from the newest version it saw.
+MAX_PAGES = 20
+
+
+@dataclass
+class SourceSync:
+    """What one ``sync_source`` run did."""
+
+    source: str
+    pages: int = 0
+    first_run: bool = False
+    limited: bool = False
+    imported: list = field(default_factory=list)
+    failed: list = field(default_factory=list)
+
+
+def sync_source(source, client=None):
+    """Bring every script linked to ``source`` up to date, in one read of its newest versions.
+
+    This is how the botcscripts.com maintainer asked instances to sync. /api/scripts/ lists
+    the latest version of every script, newest first, and version ids there only ever
+    increase. So reading it page by page until reaching the newest id seen last time finds
+    every script that has gained a version since, usually in one request. Each row already
+    carries its content, so the only other request is the PDF of a new version of a script
+    linked here. Rows for other scripts are passed over.
+
+    With no cursor yet, only the first page is read, and the cursor starts from there: there
+    is nothing to say how far back to look. Versions published before that are for
+    `sync_upstream --full --script <id>` to fetch.
+
+    The cursor only moves once the whole read has succeeded, so a run stopped by a refusal
+    starts from the same place next time. Versions it had already written are held by then,
+    and are passed over rather than fetched again.
+    """
+    source = normalise_source(source)
+    client = client or UpstreamClient(source)
+    linked = _linked_by_upstream_id(source)
+    last_seen = cursor_for(source)
+    result = SourceSync(source=source, first_run=last_seen is None)
+
+    rows, newest = [], None
+    for page in range(1, MAX_PAGES + 1):
+        payload = client.newest_versions(page)
+        result.pages = page
+        reached = False
+        for row in payload.get("results") or []:
+            pk = row.get("pk")
+            if not isinstance(pk, int):
+                continue
+            newest = pk if newest is None else max(newest, pk)
+            if last_seen is not None and pk <= last_seen:
+                reached = True
+                break
+            if row.get("script_id") in linked:
+                rows.append(row)
+        if reached or last_seen is None or not payload.get("next"):
+            break
+    else:
+        result.limited = True
+
+    with notifications.attributed("Synced", user=None, origin=source), notifications.batched():
+        # Oldest first, as an upload would arrive. Each row is a different script, since the
+        # list holds only latest versions.
+        for row in reversed(rows):
+            script = linked[row["script_id"]]
+            version = row.get("version")
+            try:
+                wanted, _ = _select_versions({version: None}, _held_versions(script), latest=version)
+                if not wanted:
+                    continue
+                pdf = client.pdf(row["script_id"], version)
+                created = import_version(source, row, pdf=pdf, link=True, enforce_owner=False)
+            except Blocked:
+                raise
+            except UpstreamError as exc:
+                result.failed.append(f"{script.name} {version}: {exc}")
+                continue
+            if created is not None:
+                result.imported.append(created)
+
+    if newest is not None and (last_seen is None or newest > last_seen):
+        _advance_cursor(source, newest)
+    _mark_checked(source)
+    return result
+
+
+def _linked_by_upstream_id(source):
+    return {script.upstream_id: script for script in linked_scripts().filter(upstream_source=source)}
+
+
+def cursor_for(source):
+    """The newest version id seen at ``source`` by the last sync, or None before the first."""
+    return models.UpstreamCursor.objects.filter(source=source).values_list("last_version_pk", flat=True).first()
+
+
+def _advance_cursor(source, pk):
+    models.UpstreamCursor.objects.update_or_create(source=source, defaults={"last_version_pk": pk})
+
+
+def _mark_checked(source):
+    linked_scripts().filter(upstream_source=source).update(last_synced=timezone.now())
+
+
 def linked_scripts():
     return models.Script.objects.filter(
         sync_enabled=True,
         upstream_id__isnull=False,
         upstream_source__isnull=False,
     ).order_by("pk")
+
+
+def linked_sources():
+    """Every instance at least one script here is linked to, normalised."""
+    return sorted({normalise_source(source) for source in linked_scripts().values_list("upstream_source", flat=True)})

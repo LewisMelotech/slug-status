@@ -593,7 +593,7 @@ def test_the_import_page_refuses_while_uploads_are_disabled(settings):
         views.ScriptImportView.as_view()(request)
 
 
-# --- What each kind of import costs the source ------------------------------------------
+# --- What an import, or a check of one script, costs the source ------------------------
 
 
 class ServingClient:
@@ -651,7 +651,7 @@ def held_here(monkeypatch):
     return state
 
 
-def test_routine_sync_costs_one_request_when_nothing_is_new(held_here):
+def test_checking_one_script_costs_one_request_when_nothing_is_new(held_here):
     from scripts.upstream import sync_script
 
     held_here.versions = ["1.0.0", "1.1.0", "1.2.0"]
@@ -663,7 +663,7 @@ def test_routine_sync_costs_one_request_when_nothing_is_new(held_here):
     assert held_here.checked == 1
 
 
-def test_routine_sync_fetches_a_newer_latest_version(held_here):
+def test_checking_one_script_fetches_a_newer_latest_version(held_here):
     from scripts.upstream import sync_script
 
     held_here.versions = ["1.0.0", "1.1.0"]
@@ -675,7 +675,7 @@ def test_routine_sync_fetches_a_newer_latest_version(held_here):
     assert held_here.written == ["1.2.0"]
 
 
-def test_routine_sync_takes_only_the_latest_of_several_new_versions(held_here):
+def test_checking_one_script_takes_only_the_latest_of_several_new_versions(held_here):
     from scripts.upstream import sync_script
 
     held_here.versions = ["1.0.0"]
@@ -688,7 +688,7 @@ def test_routine_sync_takes_only_the_latest_of_several_new_versions(held_here):
     assert held_here.written == ["1.3.0"]
 
 
-def test_routine_sync_follows_the_version_the_source_flags_as_latest(held_here):
+def test_checking_one_script_follows_the_version_the_source_flags_as_latest(held_here):
     from scripts.upstream import sync_script
 
     held_here.versions = ["1.0.0"]
@@ -699,7 +699,7 @@ def test_routine_sync_follows_the_version_the_source_flags_as_latest(held_here):
     assert held_here.written == ["1.1.0"]
 
 
-def test_routine_sync_leaves_gaps_and_a_full_sync_fills_them(held_here):
+def test_checking_one_script_leaves_gaps_and_a_full_sync_fills_them(held_here):
     from scripts.upstream import sync_script
 
     held_here.versions = ["1.0.0", "2.0.0"]
@@ -738,12 +738,6 @@ def test_importing_again_fetches_only_what_is_missing(held_here):
 # --- The commands stop asking a source that refuses ---------------------------------------
 
 
-def _linked(name, source):
-    from types import SimpleNamespace
-
-    return SimpleNamespace(name=name, upstream_source=source, upstream_url=f"{source}/script/1")
-
-
 def test_a_full_sync_is_one_script_at_a_time():
     from django.core.management import CommandError, call_command
 
@@ -751,33 +745,53 @@ def test_a_full_sync_is_one_script_at_a_time():
         call_command("sync_upstream", "--full")
 
 
-def test_sync_stops_asking_a_source_once_it_refuses(monkeypatch):
+def test_sync_reads_each_source_once_and_carries_on_past_one_that_refuses(monkeypatch):
     from io import StringIO
+    from types import SimpleNamespace
 
     from django.core.management import CommandError, call_command
 
     from scripts import upstream
 
     other = "http://other.example"
-    scripts = [_linked("A", DEFAULT_SOURCE), _linked("B", other), _linked("C", DEFAULT_SOURCE)]
-    asked = []
+    read = []
 
-    def sync(script, full=False):
-        asked.append(script.name)
-        if script.upstream_source == DEFAULT_SOURCE:
+    def sync_source(source):
+        read.append(source)
+        if source == DEFAULT_SOURCE:
             raise Blocked("refused with HTTP 403")
-        return []
+        return SimpleNamespace(imported=[], failed=[], pages=1, first_run=False, limited=False)
 
-    monkeypatch.setattr(upstream, "linked_scripts", lambda: scripts)
-    monkeypatch.setattr(upstream, "sync_script", sync)
+    monkeypatch.setattr(upstream, "linked_sources", lambda: [DEFAULT_SOURCE, other])
+    monkeypatch.setattr(upstream, "sync_source", sync_source)
     err = StringIO()
 
-    with pytest.raises(CommandError, match="1 script"):
+    with pytest.raises(CommandError, match="1 problem"):
         call_command("sync_upstream", stdout=StringIO(), stderr=err)
 
-    # C shares A's source and is never asked about; B's source is a different server.
-    assert asked == ["A", "B"]
-    assert f"not checked: 1 script(s) from {DEFAULT_SOURCE}" in err.getvalue()
+    # Once per source, not once per script, and a refusal from one source is not the other's.
+    assert read == [DEFAULT_SOURCE, other]
+    assert "refused with HTTP 403" in err.getvalue()
+
+
+def test_a_dry_run_asks_the_source_nothing(monkeypatch):
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    from scripts import upstream
+
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("a dry run read the source")
+
+    monkeypatch.setattr(upstream, "linked_sources", lambda: [DEFAULT_SOURCE])
+    monkeypatch.setattr(upstream, "cursor_for", lambda source: 1234)
+    monkeypatch.setattr(upstream, "sync_source", must_not_run)
+    out = StringIO()
+
+    call_command("sync_upstream", "--dry-run", stdout=out)
+
+    assert f"would read {DEFAULT_SOURCE}: down to version 1234" in out.getvalue()
 
 
 def test_import_script_stops_at_the_first_refusal(monkeypatch):
@@ -803,23 +817,225 @@ def test_import_script_stops_at_the_first_refusal(monkeypatch):
     assert "not attempted: 2, 3" in err.getvalue()
 
 
-def test_the_admin_sync_action_stops_asking_a_source_once_it_refuses(monkeypatch):
+def test_the_admin_sync_action_reads_each_source_once_whatever_is_selected(monkeypatch):
+    from types import SimpleNamespace
+
     from django.contrib.admin.sites import AdminSite
 
     from scripts import models, upstream
     from scripts.admin import ScriptAdmin
 
-    asked, said = [], []
+    read, said = [], []
 
-    def sync(script, full=False):
-        asked.append(script.name)
-        raise Blocked("refused with HTTP 403")
+    def sync_source(source):
+        read.append(source)
+        return SimpleNamespace(imported=[], failed=[])
 
-    monkeypatch.setattr(upstream, "sync_script", sync)
+    monkeypatch.setattr(upstream, "sync_source", sync_source)
     model_admin = ScriptAdmin(models.Script, AdminSite())
     monkeypatch.setattr(model_admin, "message_user", lambda request, message, *args, **kwargs: said.append(message))
 
-    model_admin.sync_now(None, [_linked("A", DEFAULT_SOURCE), _linked("B", DEFAULT_SOURCE)])
+    def selected(name, source, sync_enabled=True):
+        return SimpleNamespace(name=name, upstream_source=source, upstream_id=1, sync_enabled=sync_enabled)
 
-    assert asked == ["A"]
-    assert any("not synced" in message for message in said)
+    other = "http://other.example"
+    model_admin.sync_now(
+        None,
+        [
+            selected("A", DEFAULT_SOURCE),
+            selected("B", DEFAULT_SOURCE),
+            selected("C", other),
+            selected("D", "http://not-followed.example", sync_enabled=False),
+        ],
+    )
+
+    # Sorted, so in a stable order: "http://other" sorts before "https://www".
+    assert read == [other, DEFAULT_SOURCE]
+    assert said == [
+        f"{other}: every linked script is up to date.",
+        f"{DEFAULT_SOURCE}: every linked script is up to date.",
+    ]
+
+
+# --- The scheduled sync: one read of the newest versions, down to the last one seen -------
+
+
+class JSONResponse(FakeResponse):
+    def __init__(self, payload):
+        super().__init__(200, b"", "http://example.test/api/scripts/")
+        self.payload = payload
+
+    def json(self):
+        return self.payload
+
+
+def test_the_newest_versions_are_asked_for_newest_first_with_homebrew_and_hybrid():
+    # Left to its defaults the list leaves out hybrid and homebrew scripts, and a new
+    # version of a linked one of those would never be seen.
+    session = FakeSession(JSONResponse({"results": [], "next": None}))
+
+    UpstreamClient(session=session).newest_versions(2)
+
+    (url,) = session.requested
+    assert url.startswith(f"{DEFAULT_SOURCE}/api/scripts/?")
+    for part in ("ordering=-pk", "include_hybrid=true", "include_homebrew=true", "page=2"):
+        assert part in url
+
+
+class FeedClient:
+    """A source's newest-versions list, a page at a time, recording every request."""
+
+    def __init__(self, *pages, refuse_page=None):
+        self.pages = pages
+        self.refuse_page = refuse_page
+        self.asked = []
+
+    def newest_versions(self, page):
+        self.asked.append(f"page {page}")
+        if page == self.refuse_page:
+            raise Blocked("refused with HTTP 403")
+        rows = [
+            {"pk": pk, "script_id": script_id, "name": f"Script {script_id}", "version": number, "content": []}
+            for pk, script_id, number in self.pages[page - 1]
+        ]
+        return {"results": rows, "next": f"?page={page + 1}" if page < len(self.pages) else None}
+
+    def pdf(self, script_id, version):
+        self.asked.append(f"pdf {script_id} {version}")
+
+
+@pytest.fixture
+def feed(monkeypatch):
+    """sync_source with the database stubbed away: linked scripts, what they hold, the cursor."""
+    from types import SimpleNamespace
+
+    from scripts import upstream
+
+    state = SimpleNamespace(linked={}, held={}, cursor=None, written=[], checked=0)
+
+    def link(upstream_id, *held):
+        state.linked[upstream_id] = SimpleNamespace(name=f"Script {upstream_id}", upstream_id=upstream_id)
+        state.held[upstream_id] = list(held)
+
+    def write(source, row, **kwargs):
+        state.written.append((row["script_id"], row["version"]))
+        return SimpleNamespace(version=row["version"], script=state.linked[row["script_id"]])
+
+    def advance(source, pk):
+        state.cursor = pk
+
+    def check(source):
+        state.checked += 1
+
+    state.link = link
+    monkeypatch.setattr(upstream, "_linked_by_upstream_id", lambda source: state.linked)
+    monkeypatch.setattr(upstream, "_held_versions", lambda script: state.held[script.upstream_id])
+    monkeypatch.setattr(upstream, "cursor_for", lambda source: state.cursor)
+    monkeypatch.setattr(upstream, "_advance_cursor", advance)
+    monkeypatch.setattr(upstream, "_mark_checked", check)
+    monkeypatch.setattr(upstream, "import_version", write)
+    return state
+
+
+def test_sync_reads_down_to_the_last_version_seen_and_no_further(feed):
+    from scripts.upstream import sync_source
+
+    feed.cursor = 106
+    client = FeedClient(
+        [(110, 1, "1.0.0"), (109, 2, "1.0.0"), (108, 3, "1.0.0")],
+        [(107, 4, "1.0.0"), (106, 5, "1.0.0"), (105, 6, "1.0.0")],
+        [(104, 7, "1.0.0")],
+    )
+
+    result = sync_source(DEFAULT_SOURCE, client=client)
+
+    assert client.asked == ["page 1", "page 2"]
+    assert result.pages == 2
+    assert feed.cursor == 110
+    assert feed.checked == 1
+
+
+def test_a_sync_with_nothing_new_costs_one_request(feed):
+    from scripts.upstream import sync_source
+
+    feed.cursor = 110
+    feed.link(1, "1.0.0")
+    client = FeedClient([(110, 1, "1.0.0"), (109, 2, "1.0.0")], [(108, 3, "1.0.0")])
+
+    result = sync_source(DEFAULT_SOURCE, client=client)
+
+    assert client.asked == ["page 1"]
+    assert result.imported == []
+    assert feed.cursor == 110
+
+
+def test_only_new_versions_of_linked_scripts_are_imported_and_only_they_cost_a_pdf(feed):
+    from scripts.upstream import sync_source
+
+    feed.cursor = 100
+    feed.link(2, "1.0.0")  # gains 1.1.0
+    feed.link(3, "2.0.0")  # already holds the latest
+    feed.link(4, "3.0.0")  # holds something newer than the source's latest
+    client = FeedClient([(110, 1, "1.0.0"), (109, 2, "1.1.0"), (108, 3, "2.0.0"), (107, 4, "2.5.0"), (100, 5, "1.0.0")])
+
+    result = sync_source(DEFAULT_SOURCE, client=client)
+
+    # Script 1 is not linked here; its row costs nothing beyond the page it was on.
+    assert client.asked == ["page 1", "pdf 2 1.1.0"]
+    assert feed.written == [(2, "1.1.0")]
+    assert [version.version for version in result.imported] == ["1.1.0"]
+
+
+def test_the_first_sync_reads_one_page_and_starts_from_there(feed):
+    from scripts.upstream import sync_source
+
+    client = FeedClient([(110, 1, "1.0.0"), (108, 2, "1.0.0")], [(107, 3, "1.0.0")])
+
+    result = sync_source(DEFAULT_SOURCE, client=client)
+
+    assert client.asked == ["page 1"]
+    assert result.first_run is True
+    assert feed.cursor == 110
+
+
+def test_the_cursor_stays_put_when_the_source_refuses_partway(feed):
+    from scripts.upstream import sync_source
+
+    feed.cursor = 100
+    client = FeedClient([(110, 1, "1.0.0")], [(105, 2, "1.0.0")], refuse_page=2)
+
+    with pytest.raises(Blocked):
+        sync_source(DEFAULT_SOURCE, client=client)
+
+    # The next run starts from the same place rather than skipping what was not read.
+    assert feed.cursor == 100
+    assert feed.checked == 0
+
+
+def test_a_sync_stops_at_the_page_limit_and_says_so(feed, monkeypatch):
+    from scripts import upstream
+
+    monkeypatch.setattr(upstream, "MAX_PAGES", 2)
+    feed.cursor = 1
+    client = FeedClient([(30, 1, "1.0.0")], [(20, 2, "1.0.0")], [(10, 3, "1.0.0")])
+
+    result = upstream.sync_source(DEFAULT_SOURCE, client=client)
+
+    assert client.asked == ["page 1", "page 2"]
+    assert result.limited is True
+    assert feed.cursor == 30
+
+
+def test_a_version_that_cannot_be_imported_is_reported_and_the_rest_carry_on(feed):
+    from scripts.upstream import sync_source
+
+    feed.cursor = 100
+    feed.link(2, "1.0.0")
+    feed.link(3, "1.0.0")
+    client = FeedClient([(110, 2, "v2 beta"), (109, 3, "1.1.0")])
+
+    result = sync_source(DEFAULT_SOURCE, client=client)
+
+    assert feed.written == [(3, "1.1.0")]
+    assert len(result.failed) == 1 and "v2 beta" in result.failed[0]
+    assert feed.cursor == 110
