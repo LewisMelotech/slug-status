@@ -91,6 +91,13 @@
     showSimilarScripts()
 </script>
 
+{% for notice in notices %}
+<div class="alert alert-{% if notice.level_tag == 'error' %}danger{% else %}{{ notice.level_tag }}{% endif %} alert-dismissible fade show mt-2 mb-0" role="alert">
+    {{ notice.message }}
+    <button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+</div>
+{% endfor %}
+
 <div class="row">
     <div class="col-auto">
         <h1>

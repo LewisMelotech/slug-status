@@ -245,9 +245,15 @@ class ScriptView(generic.DetailView):
         self.object = self.get_object()
         context = self.get_context_data(object=self.object)
         context["active-tab"] = ""
-        _messages = messages.get_messages(request)
-        for message in _messages:
-            context["activetab"] = message.message
+        # Commenting sends a message naming the tab to reopen, such as "comments-tab".
+        # Anything else is for the visitor to read, like the result of uploading a PDF or
+        # setting a custom id, and was being swallowed here unshown.
+        context["notices"] = []
+        for message in messages.get_messages(request):
+            if str(message.message).endswith("-tab"):
+                context["activetab"] = message.message
+            else:
+                context["notices"].append(message)
         return self.render_to_response(context)
 
     def get_context_data(self, **kwargs):

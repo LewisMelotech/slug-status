@@ -173,3 +173,24 @@ def test_only_a_post_is_accepted():
     request = RequestFactory().get("/script/12/1.0.0/pdf")
 
     assert views.upload_version_pdf(request, pk=12, version="1.0.0").status_code == 405
+
+
+# --- What the script page tells you afterwards ----------------------------------------------
+
+
+def test_the_script_page_shows_messages_and_keeps_tab_names_to_itself(monkeypatch):
+    # Commenting sends "comments-tab" to say which tab to reopen; the PDF upload, the custom
+    # id form and signing in send messages meant to be read, which were being swallowed.
+    view = views.ScriptView()
+    monkeypatch.setattr(view, "get_object", lambda: SimpleNamespace())
+    monkeypatch.setattr(view, "get_context_data", lambda **kwargs: {})
+    monkeypatch.setattr(view, "render_to_response", lambda context: context)
+    request = RequestFactory().get("/script/12/1.0.0")
+    added = SimpleNamespace(message="PDF added for Sects and Violets v1.0.0.", level_tag="success")
+    request._messages = [SimpleNamespace(message="comments-tab", level_tag="success"), added]
+    view.setup(request, pk=12, version="1.0.0")
+
+    context = view.get(request)
+
+    assert context["activetab"] == "comments-tab"
+    assert context["notices"] == [added]
