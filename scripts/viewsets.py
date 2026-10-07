@@ -83,7 +83,10 @@ class ScriptViewSet(viewsets.ReadOnlyModelViewSet):
         one-time copy that sync_upstream will not follow. Requires the
         scripts.api_write_permission permission. When a script of the same name
         already exists and has an owner, only that owner may import into it: 403.
+        Refused with 403 while UPLOAD_DISABLED is set, except for staff, as uploads are.
         """
+        if settings.UPLOAD_DISABLED and not (request.user.is_authenticated and request.user.is_staff):
+            return Response({"error": "Uploads are currently disabled."}, status=status.HTTP_403_FORBIDDEN)
         serializer = serializers.ScriptImportSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data

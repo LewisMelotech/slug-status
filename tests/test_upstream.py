@@ -406,12 +406,13 @@ class SignedInUser(StubImporter):
 
     is_authenticated = True
     is_active = True
+    is_staff = False
 
     def has_perm(self, perm, obj=None):
         return perm == "scripts.api_write_permission"
 
 
-def test_the_api_imports_as_the_authenticated_user_and_answers_a_refusal_with_403(monkeypatch):
+def test_the_api_imports_as_the_authenticated_user_and_answers_a_refusal_with_403(monkeypatch, settings):
     from rest_framework.test import APIRequestFactory, force_authenticate
 
     from scripts import upstream, viewsets
@@ -423,6 +424,7 @@ def test_the_api_imports_as_the_authenticated_user_and_answers_a_refusal_with_40
         raise NotOwner("'Sects and Violets' already exists here and belongs to another user.")
 
     monkeypatch.setattr(upstream, "import_script", refuse)
+    settings.UPLOAD_DISABLED = False
     user = SignedInUser(pk=3)
     request = APIRequestFactory().post("/api/script_ids/import/", {"reference": "134"}, format="json")
     force_authenticate(request, user=user)
@@ -462,3 +464,64 @@ def test_the_import_page_imports_as_the_visitor(monkeypatch):
     assert response.status_code == 302
     assert seen["user"] is view.request.user
     assert "enforce_owner" not in seen
+
+
+# --- Importing follows the upload switch ------------------------------------------------
+
+
+def _api_import(user):
+    from rest_framework.test import APIRequestFactory, force_authenticate
+
+    from scripts import viewsets
+
+    request = APIRequestFactory().post("/api/script_ids/import/", {"reference": "134"}, format="json")
+    force_authenticate(request, user=user)
+    return viewsets.ScriptViewSet.as_view({"post": "import_upstream"})(request)
+
+
+def test_the_api_refuses_an_import_while_uploads_are_disabled(monkeypatch, settings):
+    from scripts import upstream
+
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("an import ran while uploads were disabled")
+
+    monkeypatch.setattr(upstream, "import_script", must_not_run)
+    settings.UPLOAD_DISABLED = True
+
+    response = _api_import(SignedInUser(pk=3))
+
+    assert response.status_code == 403
+    assert response.data == {"error": "Uploads are currently disabled."}
+
+
+def test_staff_may_still_import_through_the_api_while_uploads_are_disabled(monkeypatch, settings):
+    from scripts import upstream
+
+    seen = {}
+
+    def refuse(*args, **kwargs):
+        seen.update(kwargs)
+        raise NotOwner("refused for another reason")
+
+    monkeypatch.setattr(upstream, "import_script", refuse)
+    settings.UPLOAD_DISABLED = True
+    staff = SignedInUser(pk=1)
+    staff.is_staff = True
+
+    _api_import(staff)
+
+    assert seen["user"] is staff
+
+
+def test_the_import_page_refuses_while_uploads_are_disabled(settings):
+    from django.core.exceptions import PermissionDenied
+    from django.test import RequestFactory
+
+    from scripts import views
+
+    settings.UPLOAD_DISABLED = True
+    request = RequestFactory().post("/script/import", {"reference": "134"})
+    request.user = SignedInUser(pk=3)
+
+    with pytest.raises(PermissionDenied):
+        views.ScriptImportView.as_view()(request)

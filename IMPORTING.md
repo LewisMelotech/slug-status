@@ -107,7 +107,9 @@ of what came across.
 It is open to whoever may upload, including anonymous visitors, because importing a
 script someone else published is the same act as uploading it by hand. That includes the
 ownership rule an upload has, described under
-[Who may import into an existing script](#who-may-import-into-an-existing-script).
+[Who may import into an existing script](#who-may-import-into-an-existing-script),
+and the upload switch: while `UPLOAD_DISABLED` is set, only staff may import, here or
+through the API. `sync_upstream` is not affected, since it runs as the administrator.
 
 What is restricted is **where** it may be fetched from. The fetch runs on the server, not
 in the visitor's browser, so an unrestricted form would let anyone aim your server at any
@@ -155,7 +157,7 @@ Responses:
 | `201` | At least one version was imported |
 | `200` | Everything was already held — `imported` is empty and `skipped` counts them |
 | `400` | Unusable reference, or the far side could not be reached |
-| `403` | No credentials, wrong credentials, or missing the permission, **or** the script it would import into belongs to someone else |
+| `403` | No credentials, wrong credentials, or missing the permission, **or** the script it would import into belongs to someone else, **or** `UPLOAD_DISABLED` is set and the caller is not staff |
 
 The body carries the local script, the versions imported, how many were skipped, the
 source and upstream id, and whether it is now linked:

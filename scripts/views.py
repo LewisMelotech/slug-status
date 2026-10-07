@@ -1498,6 +1498,13 @@ class ScriptImportView(generic.FormView):
     template_name = "import.html"
     form_class = forms.ScriptImportForm
 
+    def post(self, request, *args, **kwargs):
+        # The same switch as uploading, for the reason above: an import adds a version
+        # just as an upload does, so turning uploads off has to turn this off too.
+        if settings.UPLOAD_DISABLED and not request.user.is_staff:
+            raise PermissionDenied("Uploads are currently disabled.")
+        return super().post(request, *args, **kwargs)
+
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         kwargs["user"] = self.request.user
