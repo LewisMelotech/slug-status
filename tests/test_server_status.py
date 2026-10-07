@@ -385,3 +385,42 @@ def test_json_downloads_offer_no_language_choice(template):
     assert "language_select" not in source
     assert "dropdown-toggle-split" not in source
     assert "Download JSON" in source
+
+
+# --- Where the status buttons send you back to ------------------------------------------
+
+
+class StubModerator(StubUser):
+    """Passes permission_required, which asks has_perms rather than has_perm."""
+
+    def has_perms(self, permissions):
+        return all(self.has_perm(permission) for permission in permissions)
+
+
+@pytest.mark.parametrize(
+    "next_url, expected",
+    [
+        ("/server?superseded=1", "/server?superseded=1"),
+        ("https://elsewhere.example/server", None),
+        ("//elsewhere.example/server", None),
+        ("", None),
+    ],
+)
+def test_setting_a_status_only_returns_to_a_page_on_this_site(monkeypatch, next_url, expected):
+    from types import SimpleNamespace
+
+    from django.test import RequestFactory
+    from django.urls import reverse
+
+    from scripts import server_status, views
+
+    # An unrecognised status stops before anything is saved: only the redirect is under test.
+    monkeypatch.setattr(views, "get_object_or_404", lambda *args, **kwargs: SimpleNamespace())
+    request = RequestFactory().post("/script/34/status", {"status": "nonsense", "next": next_url})
+    request.user = StubModerator(server_status.SET_STATUS)
+    request._messages = SimpleNamespace(add=lambda *args, **kwargs: None)
+
+    response = views.set_script_status(request, pk=34)
+
+    assert response.status_code == 302
+    assert response.url == (expected or reverse("server_queue"))

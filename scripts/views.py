@@ -1630,7 +1630,11 @@ def set_script_status(request, pk: int):
         wording = "live on the server" if requested == models.ScriptStatus.ONLINE else "off the server"
         messages.success(request, f"{version.script.name} v{version.version} is now marked {wording}.")
 
-    return redirect(request.POST.get("next") or "server_queue")
+    return redirect(
+        get_safe_redirect_url(
+            request.POST.get("next"), request.get_host(), request.is_secure(), default=reverse("server_queue")
+        )
+    )
 
 
 @permission_required("scripts.api_write_permission")
@@ -1655,4 +1659,5 @@ def set_script_slug(request, pk: int):
         for error in serializer.errors.get("slug", ["That custom id could not be used."]):
             messages.error(request, str(error))
 
-    return redirect(request.POST.get("next") or reverse("script", kwargs={"pk": script.pk}))
+    fallback = reverse("script", kwargs={"pk": script.pk})
+    return redirect(get_safe_redirect_url(request.POST.get("next"), request.get_host(), request.is_secure(), fallback))
