@@ -10,15 +10,19 @@
 <p class="text-muted">
   Copies a script in from <a href="https://www.botcscripts.com">botcscripts.com</a> —
   every version of it, each with its JSON and its author. PDFs do not come across, as
-  botcscripts.com does not allow them to be downloaded this way; upload one by hand if a
-  version needs it. Nothing is ever sent back the other way.
+  botcscripts.com does not allow them to be downloaded this way; if you are signed in you
+  can add one for the newest version in the PDF box below, or later with Upload PDF on a
+  version's page. Nothing is ever sent back the other way.
 </p>
 
 <div class="col-md-6 col-lg-6 p-0">
-  <form method="post">
+  <form method="post" enctype="multipart/form-data">
     {% csrf_token %}
-    {% bootstrap_form form exclude="minecraft_customisations" %}
+    {% bootstrap_form form exclude="minecraft_customisations,pdf" %}
     {% include "minecraft_customisations.html" with field=form.minecraft_customisations %}
+    {% if "pdf" in form.fields %}
+      {% bootstrap_field form.pdf %}
+    {% endif %}
     {% buttons %}
       {% if UPLOAD_DISABLED and not user.is_staff %}
         <button type="submit" class="btn btn-primary" disabled>{% trans 'Import' %}</button>

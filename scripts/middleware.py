@@ -2,7 +2,7 @@ from django.http import HttpResponse
 
 from scripts import constants, notifications
 
-UPLOAD_PATH_PREFIXES = ("/script/upload", "/api/scripts/")
+UPLOAD_PATH_PREFIXES = ("/script/upload", "/script/import", "/api/scripts/")
 # A PDF for an existing version, /script/<pk>/<version>/pdf, which no prefix covers.
 UPLOAD_PATH_SUFFIXES = ("/pdf",)
 BODY_METHODS = ("POST", "PUT", "PATCH")

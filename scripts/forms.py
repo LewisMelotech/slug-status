@@ -30,6 +30,24 @@ def minecraft_customisations_field():
     )
 
 
+def pdf_field(label="PDF", **kwargs):
+    """A PDF upload, checked the same wherever one can be given.
+
+    A ``.pdf`` that starts like a PDF, within the size limit. It is one definition so that
+    a check added here reaches the upload form, the Upload PDF button and the import page
+    alike, and none of them can be looser than the others.
+    """
+    return forms.FileField(
+        label=label,
+        validators=[
+            FileExtensionValidator(["pdf"]),
+            upload_validators.validate_pdf_upload_size,
+            upload_validators.validate_pdf_signature,
+        ],
+        **kwargs,
+    )
+
+
 class ScriptForm(forms.Form):
     name = forms.CharField(
         # Temporarily disable this constant until database migrations have occured
@@ -45,15 +63,7 @@ class ScriptForm(forms.Form):
         label="JSON",
         validators=[FileExtensionValidator(["json"]), upload_validators.validate_json_upload_size],
     )
-    pdf = forms.FileField(
-        label="PDF",
-        required=False,
-        validators=[
-            FileExtensionValidator(["pdf"]),
-            upload_validators.validate_pdf_upload_size,
-            upload_validators.validate_pdf_signature,
-        ],
-    )
+    pdf = pdf_field(required=False)
     notes = forms.CharField(
         required=False,
         widget=forms.Textarea(attrs={"rows": 17, "placeholder": "Notes (enter using Markdown formatting)"}),
@@ -269,14 +279,7 @@ class UpdateDatabaseForm(forms.Form):
 class VersionPdfForm(forms.Form):
     """A PDF for a version that already exists, checked as the upload form checks one."""
 
-    pdf = forms.FileField(
-        label="PDF",
-        validators=[
-            FileExtensionValidator(["pdf"]),
-            upload_validators.validate_pdf_upload_size,
-            upload_validators.validate_pdf_signature,
-        ],
-    )
+    pdf = pdf_field()
 
 
 class MinecraftCustomisationsForm(forms.Form):
@@ -298,6 +301,14 @@ class ScriptImportForm(forms.Form):
         help_text="Pull new versions from botcscripts.com whenever sync_upstream runs.",
     )
     minecraft_customisations = minecraft_customisations_field()
+    pdf = pdf_field(
+        label="PDF for the newest version",
+        required=False,
+        help_text=(
+            "Optional. Goes on the script's newest version, as Upload PDF on its page would, "
+            "for the script's owner, whoever imported it, or staff."
+        ),
+    )
 
     def clean(self):
         cleaned = super().clean()

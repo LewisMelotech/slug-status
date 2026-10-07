@@ -11,7 +11,7 @@ from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import RequestFactory
 
-from scripts import models, views
+from scripts import constants, forms, models, upstream, views
 
 PDF = b"%PDF-1.7\n% a script\n"
 
@@ -194,3 +194,223 @@ def test_the_script_page_shows_messages_and_keeps_tab_names_to_itself(monkeypatc
 
     assert context["activetab"] == "comments-tab"
     assert context["notices"] == [added]
+
+
+# --- Giving a PDF while importing -------------------------------------------------------------
+
+
+class ImportedScript(SimpleNamespace):
+    """What import_script hands back: the real rule, and the newest version a PDF goes on."""
+
+    def may_manage(self, user):
+        return models.Script.may_manage(self, user)
+
+    def latest_version(self):
+        return self.newest
+
+
+def imported_script(owner_id=None, imported_by_id=None, newest_pdf=None):
+    newest = StubVersion(owner_id=owner_id, pdf=newest_pdf)
+    newest.version = "1.1.0"
+    return ImportedScript(
+        pk=7,
+        name="Sects and Violets",
+        owner_id=owner_id,
+        imported_by_id=imported_by_id,
+        sync_enabled=False,
+        minecraft_customisations="",
+        versions=SimpleNamespace(count=lambda: 2),
+        newest=newest,
+        saved=None,
+    )
+
+
+def _import_with_pdf(monkeypatch, user, script, imported, content=PDF):
+    """Submit the import page as ``user``, with the import itself stubbed, and say what it said."""
+    monkeypatch.setattr(upstream, "import_script", lambda *args, **kwargs: (script, imported, 0))
+    view = views.ScriptImportView()
+    view.request = RequestFactory().post("/script/import")
+    view.request.user = user
+    said = []
+    view.request._messages = SimpleNamespace(add=lambda level, message, extra_tags="": said.append(message))
+    pdf = SimpleUploadedFile("script.pdf", content, content_type="application/pdf") if content is not None else None
+    form = SimpleNamespace(cleaned_data={"upstream_id": 134, "link": True, "minecraft_customisations": "", "pdf": pdf})
+    view.form_valid(form)
+    return said
+
+
+def test_a_signed_in_importer_of_a_new_script_gives_its_newest_version_the_pdf(monkeypatch):
+    # They are recorded as having imported it, which is what lets them look after it.
+    script = imported_script(imported_by_id=5)
+
+    said = _import_with_pdf(monkeypatch, StubUser(5), script, [SimpleNamespace(version="1.1.0")])
+
+    assert script.newest.saved == ["pdf"]
+    assert script.newest.pdf.read() == PDF
+    assert "PDF added for Sects and Violets v1.1.0." in said
+
+
+def test_a_pdf_on_import_replaces_the_one_the_version_has(monkeypatch):
+    script = imported_script(imported_by_id=5, newest_pdf="7/1.1.0/old.pdf")
+
+    said = _import_with_pdf(monkeypatch, StubUser(5), script, [SimpleNamespace(version="1.1.0")])
+
+    assert script.newest.saved == ["pdf"]
+    assert "PDF replaced for Sects and Violets v1.1.0." in said
+
+
+def test_only_the_newest_version_gets_it_however_many_the_import_brought(monkeypatch):
+    script = imported_script(imported_by_id=5)
+    older = StubVersion(owner_id=None)
+
+    _import_with_pdf(monkeypatch, StubUser(5), script, [older, SimpleNamespace(version="1.1.0")])
+
+    assert script.newest.saved == ["pdf"]
+    assert older.saved is None
+
+
+def test_importing_a_script_already_held_still_gives_its_newest_version_the_pdf(monkeypatch):
+    # Nothing new came in, so this is the same as using the PDF button on the script page.
+    script = imported_script(owner_id=5)
+
+    said = _import_with_pdf(monkeypatch, StubUser(5), script, [])
+
+    assert script.newest.saved == ["pdf"]
+    assert "PDF added for Sects and Violets v1.1.0." in said
+    assert not any(message.startswith("Imported") for message in said)
+
+
+def test_staff_may_give_any_script_a_pdf_on_import(monkeypatch):
+    script = imported_script(owner_id=1)
+
+    _import_with_pdf(monkeypatch, StubUser(9, is_staff=True), script, [])
+
+    assert script.newest.saved == ["pdf"]
+
+
+@pytest.mark.parametrize("user", [StubUser(5), StubAnonymous()])
+def test_anyone_else_imports_but_the_pdf_is_left_off_and_they_are_told(monkeypatch, user):
+    # Someone else's script, or no account to look after one: the same people the Upload PDF
+    # button refuses. The import itself is theirs to do, so it still goes ahead.
+    script = imported_script(owner_id=1)
+
+    said = _import_with_pdf(monkeypatch, user, script, [SimpleNamespace(version="1.1.0")])
+
+    assert script.newest.saved is None
+    assert any(message.startswith("Imported Sects and Violets") for message in said)
+    assert any("PDF was not added" in message for message in said)
+
+
+def test_no_pdf_leaves_everything_and_the_note_about_pdfs_alone(monkeypatch):
+    script = imported_script(imported_by_id=5)
+
+    said = _import_with_pdf(monkeypatch, StubUser(5), script, [SimpleNamespace(version="1.1.0")], content=None)
+
+    assert script.newest.saved is None
+    assert any("without PDFs" in message for message in said)
+
+
+def test_the_note_about_missing_pdfs_is_not_shown_when_one_was_just_added(monkeypatch):
+    script = imported_script(imported_by_id=5)
+
+    said = _import_with_pdf(monkeypatch, StubUser(5), script, [SimpleNamespace(version="1.1.0")])
+
+    assert not any("without PDFs" in message for message in said)
+
+
+@pytest.mark.parametrize("user, offered", [(StubAnonymous(), False), (StubUser(5), True)])
+def test_the_pdf_box_is_only_offered_to_someone_signed_in(user, offered):
+    view = views.ScriptImportView()
+    request = RequestFactory().get("/script/import")
+    request.user = user
+    view.setup(request)
+
+    assert ("pdf" in view.get_form().fields) is offered
+
+
+def _import_form(content=PDF, name="script.pdf"):
+    files = {"pdf": SimpleUploadedFile(name, content, content_type="application/pdf")} if content is not None else {}
+    return forms.ScriptImportForm({"reference": "134"}, files)
+
+
+def test_the_import_form_does_not_need_a_pdf():
+    form = _import_form(content=None)
+
+    assert form.is_valid(), form.errors
+    assert not form.cleaned_data.get("pdf")
+
+
+def test_the_import_form_takes_a_real_pdf():
+    form = _import_form()
+
+    assert form.is_valid(), form.errors
+    assert form.cleaned_data["pdf"].read() == PDF
+
+
+@pytest.mark.parametrize(
+    "content, name, message",
+    [
+        (b"<html>not a pdf</html>", "script.pdf", "not a valid PDF"),
+        (PDF, "script.txt", "extension"),
+    ],
+)
+def test_the_import_form_checks_the_pdf_as_the_upload_form_does(content, name, message):
+    form = _import_form(content, name)
+
+    assert not form.is_valid()
+    assert message in " ".join(form.errors["pdf"])
+
+
+def test_the_import_form_refuses_a_pdf_over_the_size_limit(monkeypatch):
+    monkeypatch.setattr(constants, "MAX_PDF_UPLOAD_BYTES", 10)
+
+    form = _import_form()
+
+    assert not form.is_valid()
+    assert "pdf" in form.errors
+
+
+def test_every_form_that_takes_a_pdf_checks_it_the_same_way():
+    """One definition, so a check added to one cannot be missing from the others."""
+    checks = [
+        form.base_fields["pdf"].validators for form in (forms.ScriptForm, forms.VersionPdfForm, forms.ScriptImportForm)
+    ]
+
+    assert checks[0] == checks[1] == checks[2]
+
+
+def test_the_import_page_can_carry_a_file_and_has_the_pdf_box():
+    from django.template.loader import render_to_string
+
+    html = render_to_string("import.html", {"form": forms.ScriptImportForm(), "user": StubUser(5)})
+
+    assert 'enctype="multipart/form-data"' in html
+    assert 'name="pdf"' in html
+
+
+def test_the_pdf_section_sits_on_its_own_row_below_the_buttons():
+    """Not a column in the button row, where it pushed the other buttons onto a second line.
+
+    Read from the template source, in the order a reader of the page meets things: the
+    button row ends at its alert-messages cell, and the PDF form comes after that and
+    before the Minecraft customisations form that already had a row to itself.
+    """
+    from pathlib import Path
+
+    source = (Path(views.__file__).parent / "templates" / "script.html").read_text(encoding="utf-8")
+
+    row_end = source.index('class="p-1 alert-messages text-center"')
+    pdf = source.index("upload_version_pdf")
+    minecraft = source.index("set_minecraft_customisations")
+
+    assert source.count("upload_version_pdf") == 1
+    assert row_end < pdf < minecraft
+
+
+def test_the_import_page_puts_the_pdf_box_last():
+    from django.template.loader import render_to_string
+
+    html = render_to_string("import.html", {"form": forms.ScriptImportForm(), "user": StubUser(5)})
+
+    assert html.index('name="minecraft_customisations"') < html.index('name="pdf"')
+    assert html.count('name="pdf"') == 1

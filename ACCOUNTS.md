@@ -117,6 +117,13 @@ PDF is shown as the script's own. The file is checked as the upload form checks 
 that starts like a PDF, within the size limit. `UPLOAD_DISABLED` holds owners to it as it
 does uploads, and lets staff through.
 
+The import page has a **PDF** box that does the same for the script's **newest** version, under
+this same table, and replaces a PDF that version already has, as **Replace PDF** does. For a
+script the import creates, the person importing it is recorded as its importer, so a signed-in
+importer may give it one straight away. For a script that was already here, only those the
+table names may. Everyone else imports as usual and is told the PDF was not added, and a
+visitor with no account is not shown the box at all.
+
 ## Minecraft Customisations
 
 Each script has one free-text **Minecraft Customisations** field, for how it is set up on

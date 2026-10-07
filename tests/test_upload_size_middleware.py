@@ -26,6 +26,7 @@ def make_request(method, path, content_length):
     "method, path",
     [
         ("post", "/script/upload"),
+        ("post", "/script/import"),
         ("post", "/api/scripts/"),
         ("put", "/api/scripts/5/"),
         ("patch", "/api/scripts/5/"),
@@ -36,7 +37,7 @@ def test_oversized_upload_requests_are_rejected(middleware, method, path):
     assert response.status_code == 413
 
 
-@pytest.mark.parametrize("path", ["/script/upload", "/api/scripts/"])
+@pytest.mark.parametrize("path", ["/script/upload", "/script/import", "/api/scripts/"])
 def test_upload_requests_within_the_limit_are_allowed(middleware, path):
     response = middleware(make_request("post", path, str(constants.MAX_UPLOAD_REQUEST_BYTES)))
     assert response.status_code == 200

@@ -1523,6 +1523,14 @@ class ScriptImportView(generic.FormView):
     template_name = "import.html"
     form_class = forms.ScriptImportForm
 
+    def get_form(self, form_class=None):
+        form = super().get_form(form_class)
+        # A PDF is shown as the script's own, so only someone who could look after the script
+        # may give one (see Script.may_manage), and a visitor with no account never can.
+        if not self.request.user.is_authenticated:
+            form.fields.pop("pdf")
+        return form
+
     def post(self, request, *args, **kwargs):
         # The same switch as uploading, for the reason above: an import adds a version
         # just as an upload does, so turning uploads off has to turn this off too.
@@ -1542,17 +1550,37 @@ class ScriptImportView(generic.FormView):
             form.add_error("reference", str(exc))
             return self.form_invalid(form)
 
+        pdf = form.cleaned_data.get("pdf")
         if imported:
             versions = ", ".join(str(version.version) for version in imported)
-            messages.success(
-                self.request,
-                f"Imported {script.name} {versions}, without PDFs: botcscripts.com does not allow those to be "
-                "downloaded, so upload one on a version if it needs it.",
+            # The note is about what did not come across; with a PDF of the user's own going on
+            # the newest version, it would only be half true.
+            note = (
+                ""
+                if pdf
+                else ", without PDFs: botcscripts.com does not allow those to be downloaded, "
+                "so upload one on a version if it needs it"
             )
+            messages.success(self.request, f"Imported {script.name} {versions}{note}.")
         if skipped:
             messages.info(self.request, f"{skipped} version(s) were already here and were left alone.")
         if script and script.sync_enabled:
             messages.info(self.request, f"Linked to {script.upstream_url}; sync_upstream will follow it.")
+
+        if script and pdf:
+            # The newest version, whether or not this import brought it, so importing a script
+            # that is already here with a PDF is the same as the Upload PDF button. Only those
+            # the button is for: a script this import created counts, since its importer is
+            # recorded as having imported it; one that was already here is its owner's.
+            newest = script.latest_version()
+            if newest is not None and script.may_manage(self.request.user):
+                _attach_pdf(self.request, newest, pdf)
+            else:
+                messages.warning(
+                    self.request,
+                    "The PDF was not added: only the script's owner, whoever imported it, or staff can give "
+                    "a script a PDF.",
+                )
 
         customisations = form.cleaned_data.get("minecraft_customisations", "").strip()
         if script and customisations and customisations != script.minecraft_customisations:
@@ -1720,6 +1748,19 @@ def set_minecraft_customisations(request, pk: int):
     return redirect(get_safe_redirect_url(request.POST.get("next"), request.get_host(), request.is_secure(), fallback))
 
 
+def _attach_pdf(request, script_version, pdf) -> None:
+    """Give ``script_version`` this PDF, replacing the one it has, and say so.
+
+    Writes only the pdf field: it is not a new version, and announces nothing. The caller
+    has already decided that this person may, and that the file passed the PDF checks.
+    """
+    replacing = bool(script_version.pdf)
+    script_version.pdf = pdf
+    script_version.save(update_fields=["pdf"])
+    verb = "replaced" if replacing else "added"
+    messages.success(request, f"PDF {verb} for {script_version.script.name} v{script_version.version}.")
+
+
 def upload_version_pdf(request, pk: int, version: str):
     """Give an existing version a PDF, or replace the one it has, without a new version.
 
@@ -1744,11 +1785,7 @@ def upload_version_pdf(request, pk: int, version: str):
 
     form = forms.VersionPdfForm(request.POST, request.FILES)
     if form.is_valid():
-        replacing = bool(script_version.pdf)
-        script_version.pdf = form.cleaned_data["pdf"]
-        script_version.save(update_fields=["pdf"])
-        verb = "replaced" if replacing else "added"
-        messages.success(request, f"PDF {verb} for {script_version.script.name} v{script_version.version}.")
+        _attach_pdf(request, script_version, form.cleaned_data["pdf"])
     else:
         for error in form.errors.get("pdf", ["That file could not be used as the PDF."]):
             messages.error(request, str(error))

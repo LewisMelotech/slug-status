@@ -200,21 +200,6 @@
             <a class="btn btn-primary" href="{% url 'download_pdf' script.pk script_version.version %}">Download PDF</a>
         </div>
     {% endif %}
-    {% if can_manage %}
-        <div class="col-md-auto p-1">
-            <form method="post" action="{% url 'upload_version_pdf' script.pk script_version.version %}"
-                  enctype="multipart/form-data" class="form-inline m-0"
-                  title="Attach a PDF to version {{ script_version.version }} without making a new version">
-                {% csrf_token %}
-                <input type="file" name="pdf" accept="application/pdf,.pdf" required
-                       class="form-control-file form-control-sm mr-1" style="width: 14rem">
-                <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                <button type="submit" class="btn btn-outline-primary"{% if UPLOAD_DISABLED and not user.is_staff %} disabled{% endif %}>
-                    {% if script_version.pdf %}Replace PDF{% else %}Upload PDF{% endif %}
-                </button>
-            </form>
-        </div>
-    {% endif %}
     {% include "minecraft_commands.html" %}
     {% if not script.owner or user == script_version.script.owner %}
         <div class="col-md-auto p-1">
@@ -245,6 +230,19 @@
     <div class="p-1 alert-messages text-center"></div>
 </div>
 {% if can_manage %}
+{# On its own row, like the customisations below it, so the buttons above keep to one line. #}
+<form method="post" action="{% url 'upload_version_pdf' script.pk script_version.version %}"
+      enctype="multipart/form-data" class="form-inline mb-2"
+      title="Attach a PDF to version {{ script_version.version }} without making a new version">
+    {% csrf_token %}
+    <label for="version-pdf" class="mr-2">PDF for v{{ script_version.version }}</label>
+    <input type="file" id="version-pdf" name="pdf" accept="application/pdf,.pdf" required
+           class="form-control-file form-control-sm mr-2" style="width: 14rem">
+    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+    <button type="submit" class="btn btn-sm btn-outline-primary"{% if UPLOAD_DISABLED and not user.is_staff %} disabled{% endif %}>
+        {% if script_version.pdf %}Replace PDF{% else %}Upload PDF{% endif %}
+    </button>
+</form>
 <form method="post" action="{% url 'set_minecraft_customisations' pk=script.pk %}" class="form-inline mb-2">
     {% csrf_token %}
     <label for="{{ customisations_form.minecraft_customisations.id_for_label }}" class="mr-2">
