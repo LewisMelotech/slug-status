@@ -51,8 +51,8 @@ class Command(BaseCommand):
             return
 
         # One Discord announcement for the whole run, covering every script that gained a
-        # version. Hourly across a few dozen linked scripts, a message per script would be
-        # a burst of near-identical pings on the hour.
+        # version. Across a few dozen linked scripts, a message per script would be a burst
+        # of near-identical pings at the same moment.
         added = failures = 0
         blocked, not_checked = set(), 0
         with notifications.batched():

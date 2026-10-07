@@ -92,10 +92,12 @@ python manage.py import_script 134 --no-link
 
 ### On a timer
 
-The stack's `sync` service runs it for you, **hourly**. It calls `sync_upstream` every
-`SYNC_PERIOD` seconds (`3600` by default) counted from the clock, not from when the
+The stack's `sync` service runs it for you, **once a day at 09:00 UK time**. `SYNC_AT`
+sets the time of day and `SYNC_TIMEZONE` the zone it is read in (`Europe/London`), and the
+clock change is handled. It sleeps until that time rather than counting from when the
 container started, so a restart does not shift the schedule. A version published upstream
-therefore reaches the Server page's *Needs deploying* tab within the hour. A failed run is
+therefore reaches the Server page's *Needs deploying* tab by the next morning. Set
+`SYNC_AT` empty to sync every `SYNC_PERIOD` seconds instead. A failed run is
 logged and the schedule carries on, since someone else's server being down should not stop
 it. Watch it with `docker compose logs sync`.
 
@@ -106,10 +108,10 @@ linked script to someone else's server, for no new data.
 A run announces to Discord once, however many scripts gained a version — see
 `NOTIFICATIONS.md`.
 
-Without the `sync` service, run it from cron on the host instead, hourly to match:
+Without the `sync` service, run it from cron on the host instead, daily at 09:00 to match:
 
 ```sh
-0 * * * * cd /path/to/discord-botc-script-bot/stack && docker compose exec -T botc-scripts python manage.py sync_upstream
+0 9 * * * cd /path/to/discord-botc-script-bot/stack && docker compose exec -T botc-scripts python manage.py sync_upstream
 ```
 
 ## From the web UI
@@ -251,7 +253,7 @@ the script it already created rather than forking a second copy.
 - **The public site rejects the `python-requests` User-Agent** with a 403 on the PDF
   download path. The client sets its own; do not remove it or PDFs will silently stop
   importing while the JSON keeps working.
-- **The public site blocks instances that ask too much.** Keep `SYNC_PERIOD` generous,
+- **The public site blocks instances that ask too much.** Keep sync to once a day,
   and see [When the source refuses](#staying-linked) for what happens once it does.
 - **Nothing is pushed back.** This is a one-way copy: votes, comments and edits made here
   never reach the source instance.
