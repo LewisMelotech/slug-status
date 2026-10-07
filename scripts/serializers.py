@@ -2,7 +2,7 @@ from rest_framework import serializers
 from rest_framework.reverse import reverse
 from rest_framework.validators import UniqueValidator
 
-from scripts import constants, models, script_json, slugs, upstream
+from scripts import constants, models, script_json, slugs, upload_validators, upstream
 
 
 class ScriptSlugField(serializers.SlugField):
@@ -171,6 +171,14 @@ class ScriptUploadSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.ScriptVersion
         fields = ["pk", "name", "content", "script_type", "version", "author", "pdf", "notes"]
+        extra_kwargs = {
+            "pdf": {
+                "validators": [
+                    upload_validators.validate_pdf_upload_size,
+                    upload_validators.validate_pdf_signature,
+                ],
+            },
+        }
 
     def is_createable(self, raise_exception=False) -> bool:
         """
@@ -210,9 +218,12 @@ class ScriptUploadSerializer(serializers.ModelSerializer):
             if self.initial_data.get("script_type", None) is None:
                 errors.append("Script type is required.")
         if self.initial_data.get("content", None):
-            content = script_json.get_json_content(self.initial_data)
-            if not isinstance(content, list):
-                errors.append("Content must be a list of script items.")
+            size_errors = upload_validators.json_upload_size_errors(self.initial_data.get("content"))
+            errors.extend(size_errors)
+            if not size_errors:
+                content = script_json.get_json_content(self.initial_data)
+                if not isinstance(content, list):
+                    errors.append("Content must be a list of script items.")
         if raise_exception and errors:
             raise serializers.ValidationError(errors)
         return not errors
