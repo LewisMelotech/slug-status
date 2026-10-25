@@ -14,7 +14,7 @@ MINECRAFT_PATH = re.compile(r"^[a-z0-9_./-]+$")
 def test_both_commands_are_built_from_the_custom_id():
     assert minecraft.commands_for("sects") == (
         "/function botc_nw_lite:roles/sects",
-        "/function botc_nw_lite:scripts/sects",
+        "/function botc_nw_lite:script/sects",
     )
 
 

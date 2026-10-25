@@ -11,7 +11,7 @@ one and change the other, or the site and the bot will hand out different comman
 
 COMMAND_TEMPLATES = (
     "/function botc_nw_lite:roles/{custom_id}",
-    "/function botc_nw_lite:scripts/{custom_id}",
+    "/function botc_nw_lite:script/{custom_id}",
 )
 
 
