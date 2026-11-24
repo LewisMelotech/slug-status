@@ -30,14 +30,19 @@ def get_official_roles() -> list[dict] | None:
     if roles is not None:
         return roles
 
+    # Any failure to reach or read the list means "unavailable", which callers already
+    # handle, rather than an error that fails the upload, import or sync that asked.
     try:
         response = requests.get("https://release.botc.app/resources/data/roles.json", timeout=2)
-    except requests.exceptions.Timeout:
+    except requests.exceptions.RequestException:
         return None
 
     if not response.ok:
         return None
 
-    roles = response.json()
+    try:
+        roles = response.json()
+    except ValueError:
+        return None
     cache.set(OFFICIAL_ROLES_CACHE_KEY, roles, timeout=CACHE_TIMEOUT)
     return roles
