@@ -36,8 +36,63 @@
        background-color: rgba(141, 199, 0, 0.6);
     }
 
-    html[data-theme="dark"] #characters span[style="color:#0000ff"] {
-        color: #66b3ff !important;
+    #pdf-container {
+        position: relative;
+    }
+
+    .pdf-toggle {
+        position: absolute;
+        top: 12px;
+        right: 28px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        height: 36px;
+        padding: 0;
+        border: 0;
+        border-radius: 50%;
+        color: #ffffff;
+        background-color: rgba(33, 37, 41, 0.7);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        transition: background-color 0.15s ease, transform 0.15s ease;
+    }
+
+    .pdf-toggle:hover,
+    .pdf-toggle:focus {
+        background-color: rgba(33, 37, 41, 0.95);
+        transform: scale(1.08);
+    }
+
+    #pdf-overlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 8000;
+        background-color: rgba(0, 0, 0, 0.7);
+    }
+
+    #pdf-overlay.show {
+        display: block;
+    }
+
+    #pdf-overlay-panel {
+        position: absolute;
+        top: 5vh;
+        left: 5vw;
+        right: 5vw;
+        bottom: 5vh;
+        overflow: hidden;
+        border-radius: 0.5rem;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+    }
+
+    #pdf-overlay-panel embed {
+        width: 100%;
+        height: 100%;
     }
 </style>
 
@@ -63,6 +118,31 @@
         navigator.clipboard.writeText(base + "{% url 'scriptversion-json' script_version.pk %}")
         showAndDismissAlert("Link Copied to Clipboard")
     }
+
+    function openPdfOverlay() {
+        // Fit to width, otherwise a portrait page stays limited by the window height. The viewer only reads
+        // these parameters on load, so the overlay gets its own embed and the page's PDF is left untouched.
+        var pdf = document.querySelector("#pdf-container embed").cloneNode();
+        pdf.src = pdf.getAttribute("src").split("#")[0] + "#toolbar=0&view=FitH";
+        document.getElementById("pdf-overlay-panel").prepend(pdf);
+        document.getElementById("pdf-overlay").classList.add("show");
+        document.body.style.overflow = "hidden";
+        document.getElementById("pdf-overlay-close").focus();
+    }
+
+    function closePdfOverlay() {
+        document.querySelector("#pdf-overlay-panel embed").remove();
+        document.getElementById("pdf-overlay").classList.remove("show");
+        document.body.style.overflow = "";
+        document.getElementById("pdf-enlarge").focus();
+    }
+
+    document.addEventListener("keydown", function (event) {
+        var overlay = document.getElementById("pdf-overlay");
+        if (event.key === "Escape" && overlay && overlay.classList.contains("show")) {
+            closePdfOverlay();
+        }
+    });
 </script>
 <script async>
 
@@ -78,18 +158,29 @@
         return listElement
     }
 
+    const similarCategories = [
+        ['identical', 'Identical to'],
+        ['containedIn', 'Contains all the characters in this script'],
+        ['contains', 'Has all the characters from this script'],
+        ['full', 'Similar Full Scripts'],
+        ['teensyville', 'Similar Teensyville Scripts'],
+    ]
+
     async function showSimilarScripts() {
-        const { full, teensyville } = await (await fetch('/script/{{script.pk}}/{{script_version.version}}/similar')).json()
+        const similar = await (await fetch('/script/{{script.pk}}/{{script_version.version}}/similar')).json()
 
-        const fullElements = full.map(createSimilarScriptEntry)
-        const fullList = document.getElementById('similar-full-list');
-        fullList.textContent = '';
-        fullList.append(...fullElements)
-
-        const teensyvilleElements = teensyville.map(createSimilarScriptEntry);
-        const teensyvilleList = document.getElementById('similar-teensyville-list');
-        teensyvilleList.textContent = '';
-        teensyvilleList.append(...teensyvilleElements)
+        const container = document.getElementById('similar-scripts');
+        container.textContent = '';
+        for (const [category, title] of similarCategories) {
+            if (!similar[category].length) continue;
+            const heading = document.createElement('h3');
+            heading.textContent = title;
+            const list = document.createElement('ul');
+            list.className = 'p-0';
+            list.append(...similar[category].map(createSimilarScriptEntry));
+            container.append(heading, list);
+        }
+        if (!container.childElementCount) container.textContent = 'No similar scripts found.';
     }
     showSimilarScripts()
 </script>
@@ -227,7 +318,10 @@
             </div>
         {% endif %}
         <div class="col-md-auto p-1">
-            {% include "favourite.html" with record=script_version %}
+            <div class="d-inline-flex align-items-center" style="gap: 0.25rem;">
+                {% include "vote.html" with record=script_version %}
+                {% include "favourite.html" with record=script_version %}
+            </div>
         </div>
     {% endif %}
     <div class="p-1 alert-messages text-center"></div>
@@ -257,28 +351,33 @@
 </form>
 {% endif %}
 <div class="row">
+    <div class="col-auto text-muted small">
+        <span>Uploaded {{ script_version.created|date:'j F Y' }}</span>
+    </div>
+</div>
+<div class="row">
     <div class="col-md-auto pl-3 pr-0 pt-0 pb-0">
         Base 3: 
             {% if script_version.edition == 0 %}
-                {% bs_icon "check-circle-fill" color="green" extra_classes="pb-1" size="24px" %}
+                {% bs_icon "check-circle-fill" extra_classes="pb-1 text-success" size="24px" %}
             {% else %}
-                {% bs_icon "x-circle-fill" color="red" extra_classes="pb-1" size="24px" %}
+                {% bs_icon "x-circle-fill" extra_classes="pb-1 text-danger" size="24px" %}
             {% endif %}
     </div>
     <div class="col-md-auto pl-2 pr-0 pt-0 pb-0">
         Kickstarter:
             {% if script_version.edition <= 1 %}
-                {% bs_icon "check-circle-fill" color="green" extra_classes="pb-1" size="24px" %}
+                {% bs_icon "check-circle-fill" extra_classes="pb-1 text-success" size="24px" %}
             {% else %}
-                {% bs_icon "x-circle-fill" color="red" extra_classes="pb-1" size="24px" %}
+                {% bs_icon "x-circle-fill" extra_classes="pb-1 text-danger" size="24px" %}
             {% endif %}
     </div>
     <div class="col-md-auto pl-2 pr-0 pt-0 pb-0">
         Carousel:
             {% if script_version.edition <= 2 %}
-                {% bs_icon "check-circle-fill" color="green" extra_classes="pb-1" size="24px" %}
+                {% bs_icon "check-circle-fill" extra_classes="pb-1 text-success" size="24px" %}
             {% else %}
-                {% bs_icon "x-circle-fill" color="red" extra_classes="pb-1" size="24px" %}
+                {% bs_icon "x-circle-fill" extra_classes="pb-1 text-danger" size="24px" %}
             {% endif %}
     </div>
     {% if user.is_staff %}
@@ -318,13 +417,28 @@
     </li>
     {% endif %}
     <li class="nav-item">
+        <a class="nav-link" id="popularity-tab" data-toggle="tab" href="#popularity" role="tab" aria-controls="popularity" aria-selected="false">Popularity</a>
+    </li>
+    <li class="nav-item">
         <a class="nav-link {% active_aria_status 'comments-tab' activetab %}" id="comments-tab" data-toggle="tab" href="#comments" role="tab" aria-controls="comments" aria-selected="false">Comments ({{ comments|length }})</a>
     </li>
 </ul>
 <div class="tab-content row p-1" height="720">
     {% if script_version.pdf %}
     <div class="col-sm-6">
-        <embed src="{{ script_version.pdf.url }}#toolbar=0" type="application/pdf" width="100%" height="720">
+        <div id="pdf-container">
+            <embed src="{{ script_version.pdf.url }}#toolbar=0" type="application/pdf" width="100%" height="720">
+            <button type="button" id="pdf-enlarge" class="pdf-toggle" onclick="openPdfOverlay()" title="Enlarge PDF" aria-label="Enlarge PDF">
+                {% bs_icon "arrows-fullscreen" size="16px" %}
+            </button>
+        </div>
+        <div id="pdf-overlay" onclick="if (event.target === this) closePdfOverlay()">
+            <div id="pdf-overlay-panel">
+                <button type="button" id="pdf-overlay-close" class="pdf-toggle" onclick="closePdfOverlay()" title="Close enlarged PDF" aria-label="Close enlarged PDF">
+                    {% bs_icon "fullscreen-exit" size="16px" %}
+                </button>
+            </div>
+        </div>
     </div>
     {% endif %}
     {% if script_version.notes or bootlegger_rules %}
@@ -361,7 +475,12 @@
     {% if changes.items|length > 0 %}
     <div class="tab-pane fade col-sm-6" id="history" role="tabpanel" aria-labelledby="history-tab">
         {% for version, diffs in changes.items %}
-            <h2>{{ diffs.previous_version }} -> {{ version }}</h2>
+            <div class="row">
+                <div class="col-sm-10 d-flex justify-content-between align-items-baseline">
+                    <h2 class="mb-0">{{ diffs.previous_version }} -> {{ version }}</h2>
+                    <small class="text-muted ml-2" style="font-size: 0.75rem; white-space: nowrap;">{{ diffs.created|date:'j F Y' }}</small>
+                </div>
+            </div>
             <div class="row">
                 <div class="col-sm-5">
                     <ul class="p-0">
@@ -393,14 +512,34 @@
     </div>
     {% endif %}
     <div class="tab-pane fade col-sm-6" id="similarity" role="tabpanel" aria-labelledby="similarity-tab">
-        <h3>Full Scripts</h3>
-        <ul class="p-0" id="similar-full-list">
-        loading...
-        </ul>
-        <h3>Teensyville</h3>
-        <ul class="p-0" id="similar-teensyville-list">
-        loading...
-        </ul>
+        <div id="similar-scripts">loading...</div>
+    </div>
+    {% if script_version.pdf %}
+    <div class="tab-pane fade col-sm-6" id="popularity" role="tabpanel" aria-labelledby="popularity-tab">
+    {% else %}
+    <div class="tab-pane fade col-sm-8" id="popularity" role="tabpanel" aria-labelledby="popularity-tab">
+    {% endif %}
+        <p id="popularity-status" role="status">Historical data starts when popularity tracking was enabled.</p>
+        <div id="popularity-charts" class="d-none">
+            <p id="popularity-history-data-help" class="sr-only">A screen-reader-accessible table contains daily totals for both charts.</p>
+            <h3>Likes</h3>
+            <canvas id="vote-popularity-chart" height="100" role="img" aria-label="Likes history chart" aria-describedby="popularity-history-data-help">Daily likes history. Refer to the accessible data table for values.</canvas>
+            <h3 class="mt-4">Favourites</h3>
+            <canvas id="favourite-popularity-chart" height="100" role="img" aria-label="Favourites history chart" aria-describedby="popularity-history-data-help">Daily favourites history. Refer to the accessible data table for values.</canvas>
+            <div class="sr-only">
+                <table>
+                    <caption>Daily likes and favourites totals</caption>
+                    <thead>
+                        <tr>
+                            <th scope="col">Date</th>
+                            <th scope="col">Likes</th>
+                            <th scope="col">Favourites</th>
+                        </tr>
+                    </thead>
+                    <tbody id="popularity-history-data-rows"></tbody>
+                </table>
+            </div>
+        </div>
     </div>
     <div class="tab-pane fade col-sm-6" id="collection" role="tabpanel" aria-labelledby="collection-tab">
         <ul class="p-0">
@@ -423,6 +562,7 @@
                 {% endif %}
                     {{ comment_info.comment.comment|markdownify }}
                 </div>
+
                 <div class="align-self-end">
                     {% if comment_info.comment.user == user %}
                     <a class="btn btn-info btn-sm" data-toggle="collapse" href="#edit_{{comment_info.comment.pk}}" role="button" aria-expanded="false" aria-controls="editPanel_{{comment.pk}}">Edit</a>
@@ -481,5 +621,160 @@
     {% endif %}
 </div>
 
+<script>
+    (function () {
+        var popularityLoaded = false;
+        var popularityLoading = false;
+        var status = document.getElementById("popularity-status");
+        var charts = document.getElementById("popularity-charts");
+        var popularityCharts = [];
+        var popularityData = null;
+
+        function popularityTheme() {
+            var isDark = document.documentElement.getAttribute("data-theme") === "dark";
+            return {
+                text: isDark ? "#e0e0e0" : "#212529",
+                grid: isDark ? "rgba(255, 255, 255, 0.25)" : "rgba(0, 0, 0, 0.2)",
+                likes: isDark ? "#7ee787" : "#008000",
+                favourites: isDark ? "#e6b93f" : "#ffc000"
+            };
+        }
+
+        function renderPopularityCharts() {
+            if (!popularityData) return;
+
+            var theme = popularityTheme();
+            popularityCharts.forEach(function (chart) {
+                chart.destroy();
+            });
+            popularityCharts = [
+                createPopularityChart(
+                    "vote-popularity-chart",
+                    "Likes",
+                    popularityData.votes,
+                    theme.likes,
+                    theme.text,
+                    theme.grid,
+                    popularityData.labels
+                ),
+                createPopularityChart(
+                    "favourite-popularity-chart",
+                    "Favourites",
+                    popularityData.favourites,
+                    theme.favourites,
+                    theme.text,
+                    theme.grid,
+                    popularityData.labels
+                )
+            ];
+        }
+
+        var popularityThemeObserver = new MutationObserver(function () {
+            renderPopularityCharts();
+        });
+        popularityThemeObserver.observe(document.documentElement, {
+            attributes: true,
+            attributeFilter: ["data-theme"]
+        });
+
+        function loadChartJs() {
+            if (window.Chart) return Promise.resolve();
+            return new Promise(function (resolve, reject) {
+                var chartScript = document.createElement("script");
+                chartScript.src = "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.8.0/Chart.min.js";
+                chartScript.integrity = "sha256-Uv9BNBucvCPipKQ2NS9wYpJmi8DTOEfTA/nH2aoJALw=";
+                chartScript.crossOrigin = "anonymous";
+                chartScript.onload = resolve;
+                chartScript.onerror = reject;
+                document.head.appendChild(chartScript);
+            });
+        }
+
+        function createPopularityChart(canvasId, label, values, color, textColor, gridColor, labels) {
+            var context = document.getElementById(canvasId).getContext("2d");
+            var weeklyGridLineColors = labels.map(function (_, index) {
+                return index % 7 === 0 ? gridColor : "rgba(0, 0, 0, 0)";
+            });
+            return new Chart(context, {
+                type: "line",
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: label,
+                        data: values,
+                        borderColor: color,
+                        backgroundColor: color,
+                        fill: false,
+                        lineTension: 0,
+                        pointRadius: 2,
+                        borderWidth: 3
+                    }]
+                },
+                options: {
+                    legend: { labels: { fontColor: textColor } },
+                    scales: {
+                        xAxes: [{
+                            ticks: {
+                                fontColor: textColor,
+                                padding: 8,
+                                autoSkip: false,
+                                callback: function (value, index) {
+                                    return index % 7 === 0 ? value : "";
+                                }
+                            },
+                            gridLines: { color: weeklyGridLineColors, drawTicks: false }
+                        }],
+                        yAxes: [{
+                            ticks: { fontColor: textColor, precision: 0 },
+                            gridLines: { color: gridColor }
+                        }]
+                    }
+                }
+            });
+        }
+
+        $("#popularity-tab").on("shown.bs.tab", function () {
+            if (popularityLoaded || popularityLoading) return;
+            popularityLoading = true;
+            Promise.all([
+                fetch("{% url 'script_popularity' script.pk %}").then(function (response) {
+                    if (!response.ok) throw new Error("Popularity request failed");
+                    return response.json();
+                }),
+                loadChartJs()
+            ])
+                .then(function (results) {
+                    var data = results[0];
+                    if (!data.labels.length) {
+                        status.textContent = "No popularity history is available yet.";
+                        popularityLoaded = true;
+                        popularityLoading = false;
+                        return;
+                    }
+
+                    var historyRows = document.getElementById("popularity-history-data-rows");
+                    data.labels.forEach(function (label, index) {
+                        var row = document.createElement("tr");
+                        [label, data.votes[index], data.favourites[index]].forEach(function (value) {
+                            var cell = document.createElement("td");
+                            cell.textContent = value;
+                            row.appendChild(cell);
+                        });
+                        historyRows.appendChild(row);
+                    });
+                    status.classList.add("d-none");
+                    charts.classList.remove("d-none");
+                    popularityData = data;
+                    renderPopularityCharts();
+                    popularityLoaded = true;
+                    popularityLoading = false;
+                })
+                .catch(function () {
+                    status.textContent = "Popularity history could not be loaded. Please try again.";
+                    popularityLoading = false;
+                });
+        });
+    })();
+</script>
 
 {% endblock %}

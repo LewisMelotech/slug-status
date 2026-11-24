@@ -137,7 +137,10 @@ class ScriptForm(forms.Form):
 
         try:
             script = models.Script.objects.get(name=script_name)
+        except models.Script.DoesNotExist:
+            script = None
 
+        if script:
             if not script.may_add_versions(self.user):
                 raise ValidationError("You are not the owner of this script and cannot upload a new version")
 
@@ -148,10 +151,7 @@ class ScriptForm(forms.Form):
                         f"Version {new_version} already exists. You cannot upload a different script with the same version number."
                     )
 
-            validators.validate_homebrew_character(json, script)
-
-        except models.Script.DoesNotExist:
-            pass
+        validators.validate_homebrew_character(json, script)
 
         validators.validate_json(json)
 
