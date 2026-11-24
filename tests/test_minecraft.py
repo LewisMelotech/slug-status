@@ -54,7 +54,7 @@ def test_the_menu_offers_both_commands_to_copy_in_order():
     html = render_to_string("minecraft_commands.html", {"minecraft_commands": minecraft.commands_for("sects")})
     assert ">Minecraft CMD</button>" in html
     roles = html.index('data-minecraft-command="/function botc_nw_lite:roles/sects"')
-    scripts = html.index('data-minecraft-command="/function botc_nw_lite:scripts/sects"')
+    scripts = html.index('data-minecraft-command="/function botc_nw_lite:script/sects"')
     assert roles < scripts
     assert html.count('onclick="copyMinecraftCommand(this)"') == 2
 

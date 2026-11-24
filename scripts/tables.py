@@ -36,13 +36,14 @@ excluded_clocktower_version_fields = (
     "version",
     "pdf",
     "homebrewiness",
+    "character_mask",
 )
 
 
 class ScriptTable(tables.Table):
     name = tables.Column(
         empty_values=(),
-        order_by=("script.name", "-version"),
+        order_by=("script.name", "-version", "pk"),
         linkify=(
             "script",
             {"pk": tables.A("script.pk"), "version": tables.A("version")},
@@ -60,18 +61,18 @@ class ScriptTable(tables.Table):
             "{% endif %}"
         ),
         verbose_name="Custom id",
-        order_by=("script.slug",),
+        order_by=("script.slug", "pk"),
         attrs=table_class,
     )
 
-    author = tables.Column(attrs=table_class)
+    author = tables.Column(attrs=table_class, order_by=("author", "pk"))
 
-    script_type = tables.Column(attrs=table_class, verbose_name="Type")
+    script_type = tables.Column(attrs=table_class, verbose_name="Type", order_by=("script_type", "pk"))
 
     score = tables.TemplateColumn(
         template_name="script_table/likes.html",
         verbose_name="Likes",
-        order_by=("-score"),
+        order_by=("-score", "-pk"),
         attrs={
             "td": {"class": "pl-2 pr-2 p-0 align-middle text-center"},
             "th": {"class": "align-middle text-center"},
@@ -81,7 +82,7 @@ class ScriptTable(tables.Table):
     num_favs = tables.TemplateColumn(
         template_name="script_table/favourites.html",
         verbose_name="Favs",
-        order_by=("-num_favs"),
+        order_by=("-num_favs", "-pk"),
         attrs={
             "td": {"class": "pl-2 pr-2 p-0 align-middle text-center"},
             "th": {"class": "align-middle text-center"},
@@ -112,6 +113,7 @@ class ClocktowerTable(ScriptTable):
     class Meta:
         model = ScriptVersion
         exclude = excluded_clocktower_version_fields
+        template_name = "script_table/table.html"
         sequence = (
             "name",
             "slug",
@@ -136,6 +138,7 @@ class UserClocktowerTable(ClocktowerTable):
     class Meta:
         model = ScriptVersion
         exclude = excluded_clocktower_version_fields
+        template_name = "script_table/table.html"
         sequence = (
             "name",
             "slug",
@@ -149,6 +152,39 @@ class UserClocktowerTable(ClocktowerTable):
         orderable = True
 
 
+class PopularityClocktowerTable(ClocktowerTable):
+    score = tables.TemplateColumn(
+        template_name="script_table/popularity_votes.html",
+        accessor="score",
+        verbose_name="Likes change",
+        order_by=("-score", "-pk"),
+        attrs=table_class,
+    )
+
+    num_favs = tables.TemplateColumn(
+        template_name="script_table/popularity_favourites.html",
+        accessor="num_favs",
+        verbose_name="Favourites change",
+        order_by=("-num_favs", "-pk"),
+        attrs=table_class,
+    )
+
+    class Meta(ClocktowerTable.Meta):
+        order_by = "score"
+
+
+class UserPopularityClocktowerTable(PopularityClocktowerTable):
+    actions = tables.TemplateColumn(
+        template_name="script_table/actions/authenticated.html",
+        orderable=False,
+        verbose_name="",
+        attrs=script_table_actions_class,
+    )
+
+    class Meta(PopularityClocktowerTable.Meta):
+        pass
+
+
 class CollectionClocktowerTable(UserClocktowerTable):
     actions = tables.TemplateColumn(
         template_name="script_table/actions/collection.html",
@@ -160,6 +196,7 @@ class CollectionClocktowerTable(UserClocktowerTable):
     class Meta:
         model = ScriptVersion
         exclude = excluded_clocktower_version_fields
+        template_name = "script_table/table.html"
         sequence = (
             "name",
             "slug",

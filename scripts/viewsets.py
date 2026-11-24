@@ -1,5 +1,7 @@
 from django.conf import settings
-from django.db.models import Count
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
+from django.db.models import F
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
@@ -13,7 +15,7 @@ from rest_framework.response import Response
 from versionfield import Version
 
 from scripts import filters as filtersets
-from scripts import models, notifications, script_json, serializers, slugs, upstream
+from scripts import models, notifications, script_json, serializers, slugs, upstream, validators
 from scripts.views import (
     calculate_edition,
     count_character,
@@ -165,7 +167,7 @@ class VersionViewSet(viewsets.ModelViewSet):
     pagination_class = ScriptPagination
 
     def get_queryset(self):
-        return models.ScriptVersion.plain_objects.annotate(score=Count("script__votes", distinct=True))
+        return models.ScriptVersion.plain_objects.annotate(score=F("script__num_votes"))
 
     def filter_queryset(self, queryset):
         # Retrieving a single script by pk should never be filtered, e.g. by "latest".
@@ -198,6 +200,7 @@ class VersionViewSet(viewsets.ModelViewSet):
         return [permission() for permission in permission_classes]
 
     @authentication_classes([BasicAuthentication])
+    @transaction.atomic
     def create(self, request, *args, **kwargs):
         if settings.UPLOAD_DISABLED and not (request.user.is_authenticated and request.user.is_staff):
             return Response({"error": "Uploads are currently disabled."}, status=status.HTTP_403_FORBIDDEN)
@@ -205,15 +208,20 @@ class VersionViewSet(viewsets.ModelViewSet):
         serializer = serializers.ScriptUploadSerializer(*args, data=request.data, **kwargs)
         if not serializer.is_valid(raise_exception=True):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        if not serializer.is_createable(raise_exception=True):
-            return Response(
-                {"error": "A script with this name and version already exists."}, status=status.HTTP_400_BAD_REQUEST
-            )
         is_latest = True
         current_tags = None
 
+        json = script_json.get_json_content(serializer.validated_data)
+        existing_script = models.Script.objects.filter(name=serializer.validated_data.get("name")).first()
+        try:
+            validators.validate_homebrew_character(json, existing_script)
+        except DjangoValidationError as e:
+            return Response({"error": e.messages[0]}, status=status.HTTP_400_BAD_REQUEST)
+
         # Either get the current script, or create a new one based on the name.
         script, created = models.Script.objects.get_or_create(name=serializer.validated_data.get("name"))
+        script = models.Script.objects.select_for_update().get(pk=script.pk)
+
         user = request.user if request.user.is_authenticated else None
         if created:
             script.owner = user
@@ -223,22 +231,21 @@ class VersionViewSet(viewsets.ModelViewSet):
                 return Response(
                     {"error": "You do not have permission to update this script."}, status=status.HTTP_403_FORBIDDEN
                 )
-            if script.latest_version():
-                # We need to protect this code against instances where a script doesn't
-                # have a latest version.
-                if Version(serializer.validated_data.get("version")) > script.latest_version().version:
-                    # This is newer than the latest version, so set that
-                    # version to not be latest.
-                    current_tags = script.latest_version().tags
-                    latest_version = script.latest_version()
-                    latest_version.latest = False
-                    latest_version.save()
-                else:
-                    # We're uploading an older version than the latest, so don't mark this version
-                    # as the latest, that's still the current latest.
-                    is_latest = False
 
-        json = script_json.get_json_content(serializer.validated_data)
+        serializer.is_createable(raise_exception=True)
+
+        if not created and script.latest_version():
+            # This script has a latest version, and this is a newer version being added.
+            if Version(serializer.validated_data.get("version")) > script.latest_version().version:
+                # Copy the tags from the latest version to this new version, and update the
+                current_tags = script.latest_version().tags
+                latest_version = script.latest_version()
+                latest_version.latest = False
+                latest_version.save()
+            else:
+                # This version is older than the latest version, so don't mark it as the latest.
+                is_latest = False
+
         homebrewiness = create_characters_and_determine_homebrew_status(json, script)
 
         num_townsfolk = count_character(json, models.CharacterType.TOWNSFOLK)
@@ -293,12 +300,16 @@ class VersionViewSet(viewsets.ModelViewSet):
         return Response(status=status.HTTP_201_CREATED, data={"pk": self.script_version.pk})
 
     @authentication_classes([BasicAuthentication])
+    @transaction.atomic
     def update(self, request, *args, **kwargs):
         pk = kwargs.pop("pk")
         try:
-            instance = models.ScriptVersion.objects.get(pk=pk)
-        except models.ScriptVersion.DoesNotExist:
+            script_id = models.ScriptVersion.plain_objects.values_list("script_id", flat=True).get(pk=pk)
+            models.Script.objects.select_for_update().get(pk=script_id)
+            instance = models.ScriptVersion.plain_objects.get(pk=pk)
+        except (models.Script.DoesNotExist, models.ScriptVersion.DoesNotExist):
             return Response({"error": "Script version not found."}, status=status.HTTP_404_NOT_FOUND)
+
         serializer = serializers.ScriptUploadSerializer(*args, data=request.data, **kwargs)
         if not serializer.is_valid(create=False, raise_exception=True):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -346,15 +357,10 @@ class VersionViewSet(viewsets.ModelViewSet):
                 {"error": "You do not have permission to delete this script."}, status=status.HTTP_403_FORBIDDEN
             )
 
-        script = instance.script
-        instance.delete()
-
-        if script.versions.count() > 0:
-            latest_version = script.latest_version()
-            latest_version.latest = True
-            latest_version.save()
-        else:
-            script.delete()
+        try:
+            instance.script.delete_version(instance.pk)
+        except models.ScriptVersion.DoesNotExist:
+            return Response({"error": "Script version not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -367,7 +373,7 @@ class TranslateScriptViewSet(viewsets.ReadOnlyModelViewSet):
     ordering = ["-pk"]
 
     def get_queryset(self):
-        queryset = models.ScriptVersion.plain_objects.annotate(score=Count("script__votes", distinct=True))
+        queryset = models.ScriptVersion.plain_objects.annotate(score=F("script__num_votes"))
         latest = self.request.query_params.get("latest")
         if latest:
             queryset = queryset.filter(latest=True)

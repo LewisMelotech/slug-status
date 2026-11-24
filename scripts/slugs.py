@@ -72,6 +72,8 @@ RESERVED_SLUGS = frozenset(
         "logout",
         "media",
         "password",
+        # Also an action segment: script/<id>/popularity.
+        "popularity",
         "robots",
         "script",
         "script-ids",

@@ -2,8 +2,10 @@ import json as js
 import os
 from collections import Counter
 from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
 from tempfile import TemporaryFile
 from typing import Any
+from urllib.parse import urlencode
 
 import requests
 from django.conf import settings
@@ -12,9 +14,10 @@ from django.contrib.auth import logout
 from django.contrib.auth.decorators import permission_required
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
 from django.contrib.auth.models import User
-from django.contrib.postgres.search import TrigramSimilarity
 from django.core.exceptions import PermissionDenied
-from django.db.models import Case, Count, F, Prefetch, When
+from django.db import transaction
+from django.db.models import Count, F, IntegerField, Min, OuterRef, Prefetch, Q, Subquery, Value
+from django.db.models.functions import Coalesce, TruncDate
 from django.http import (
     FileResponse,
     Http404,
@@ -27,8 +30,10 @@ from django.http import (
 )
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.text import get_valid_filename
 from django.views import generic
+from django.views.decorators.http import require_GET
 from django_filters.views import FilterView
 from django_tables2.views import SingleTableMixin, SingleTableView
 from versionfield import Version
@@ -41,6 +46,7 @@ from scripts import (
     minecraft,
     models,
     notifications,
+    popularity,
     script_json,
     serializers,
     server_status,
@@ -73,7 +79,84 @@ def _filter_defaults(data):
     return merged
 
 
-class ScriptsListView(SingleTableMixin, FilterView):
+def build_script_count_history(
+    start_date: date, end_date: date, initial_count: int, additions_by_date: dict[date, int]
+) -> tuple[list[str], list[int]]:
+    dates = []
+    counts = []
+    count = initial_count
+    current_date = start_date
+
+    while current_date <= end_date:
+        count += additions_by_date.get(current_date, 0)
+        dates.append(current_date.isoformat())
+        counts.append(count)
+        current_date += timedelta(days=1)
+
+    return dates, counts
+
+
+class ScriptOrderToggleMixin:
+    order_query_parameter = "script_order"
+
+    def order_script_queryset(self, queryset):
+        ordering = "pk" if self.request.GET.get(self.order_query_parameter) == "asc" else "-pk"
+        return queryset.order_by(ordering)
+
+    def get_script_order_toggle(self):
+        oldest_first = self.request.GET.get(self.order_query_parameter) == "asc"
+        query_params = self.request.GET.copy()
+        query_params.pop("page", None)
+        query_params.pop("sort", None)
+        if oldest_first:
+            query_params.pop(self.order_query_parameter, None)
+        else:
+            query_params[self.order_query_parameter] = "asc"
+
+        label = "Show newest first" if oldest_first else "Show oldest first"
+        return f"?{query_params.urlencode()}", label
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        oldest_first = self.request.GET.get(self.order_query_parameter) == "asc"
+        context["script_order_oldest_first"] = oldest_first
+        context["script_order_toggle_url"], context["script_order_toggle_label"] = self.get_script_order_toggle()
+        return context
+
+    def get_table(self, **kwargs):
+        table = super().get_table(**kwargs)
+        table.script_order_toggle_url, table.script_order_toggle_label = self.get_script_order_toggle()
+        table.script_order_oldest_first = self.request.GET.get(self.order_query_parameter) == "asc"
+        return table
+
+    def get_filterset_kwargs(self, filterset_class):
+        kwargs = super().get_filterset_kwargs(filterset_class)
+        data = kwargs["data"]
+        if data is not None and self.order_query_parameter in data:
+            data = data.copy()
+            data.pop(self.order_query_parameter)
+            kwargs["data"] = data or None
+        return kwargs
+
+
+class ActiveFilterStyleMixin:
+    def get_filterset(self, filterset_class):
+        filterset = super().get_filterset(filterset_class)
+        filter_form = filterset.form
+        filter_form.is_valid()
+        cleaned_data = getattr(filter_form, "cleaned_data", {})
+        errors = filter_form.errors
+        for field_name in filter_form.changed_data:
+            if field_name not in errors and cleaned_data.get(field_name):
+                widget = filter_form.fields[field_name].widget
+                classes = widget.attrs.get("class", "").split()
+                if "is-valid" not in classes:
+                    classes.append("is-valid")
+                widget.attrs["class"] = " ".join(classes)
+        return filterset
+
+
+class ScriptsListView(ActiveFilterStyleMixin, ScriptOrderToggleMixin, SingleTableMixin, FilterView):
     model = models.ScriptVersion
     template_name = "scriptlist.html"
     table_pagination = {"per_page": 20}
@@ -81,14 +164,10 @@ class ScriptsListView(SingleTableMixin, FilterView):
     script_view = None
 
     def get_queryset(self):
-        return (
-            super()
-            .get_queryset()
-            .prefetch_related(
-                Prefetch(
-                    "tags",
-                    queryset=models.ScriptTag.objects.all().order_by("order"),
-                )
+        return self.order_script_queryset(super().get_queryset()).prefetch_related(
+            Prefetch(
+                "tags",
+                queryset=models.ScriptTag.objects.all().order_by("order"),
             )
         )
 
@@ -108,7 +187,85 @@ class ScriptsListView(SingleTableMixin, FilterView):
         return tables.ClocktowerTable
 
 
-class UserScriptsListView(LoginRequiredMixin, SingleTableMixin, FilterView):
+class PopularityView(ActiveFilterStyleMixin, SingleTableMixin, FilterView):
+    model = models.ScriptVersion
+    filterset_class = filters.PopularityScriptVersionFilter
+    template_name = "popularity.html"
+    table_pagination = {"per_page": 20}
+
+    def get_queryset(self):
+        period_index = popularity.normalize_period_index(self.request.GET.get("period_index"))
+        period_days = popularity.POPULARITY_PERIODS[period_index]
+        cutoff = timezone.now() - timedelta(days=period_days)
+        events_by_script = (
+            models.ScriptEngagementEvent.objects.filter(
+                script_id=OuterRef("script_id"),
+                created_at__gte=cutoff,
+            )
+            .order_by()
+            .values("script_id")
+            .annotate(
+                votes_added=Count(
+                    "pk",
+                    filter=Q(event_type=models.ScriptEngagementEvent.EventType.VOTE_ADDED),
+                ),
+                votes_removed=Count(
+                    "pk",
+                    filter=Q(event_type=models.ScriptEngagementEvent.EventType.VOTE_REMOVED),
+                ),
+                favourites_added=Count(
+                    "pk",
+                    filter=Q(event_type=models.ScriptEngagementEvent.EventType.FAVOURITE_ADDED),
+                ),
+                favourites_removed=Count(
+                    "pk",
+                    filter=Q(event_type=models.ScriptEngagementEvent.EventType.FAVOURITE_REMOVED),
+                ),
+            )
+            .annotate(
+                vote_change=F("votes_added") - F("votes_removed"),
+                favourite_change=F("favourites_added") - F("favourites_removed"),
+            )
+        )
+        return (
+            models.ScriptVersion.plain_objects.filter(
+                latest=True,
+                homebrewiness=models.Homebrewiness.CLOCKTOWER,
+            )
+            .select_related("script")
+            .prefetch_related(Prefetch("tags", queryset=models.ScriptTag.objects.order_by("order")))
+            .annotate(
+                score=Coalesce(
+                    Subquery(events_by_script.values("vote_change")[:1]),
+                    Value(0),
+                    output_field=IntegerField(),
+                ),
+                num_favs=Coalesce(
+                    Subquery(events_by_script.values("favourite_change")[:1]),
+                    Value(0),
+                    output_field=IntegerField(),
+                ),
+            )
+            .filter(Q(score__gt=0) | Q(num_favs__gt=0))
+        )
+
+    def get_table_class(self):
+        if self.request.user.is_authenticated:
+            return tables.UserPopularityClocktowerTable
+        return tables.PopularityClocktowerTable
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        period_index = popularity.normalize_period_index(self.request.GET.get("period_index"))
+        context["period_index"] = period_index
+        context["period_days"] = popularity.POPULARITY_PERIODS[period_index]
+        context["popularity_periods"] = popularity.POPULARITY_PERIODS
+        return context
+
+
+class UserScriptsListView(
+    ActiveFilterStyleMixin, LoginRequiredMixin, ScriptOrderToggleMixin, SingleTableMixin, FilterView
+):
     model = models.ScriptVersion
     table_class = tables.UserClocktowerTable
     template_name = "scriptlist.html"
@@ -121,6 +278,7 @@ class UserScriptsListView(LoginRequiredMixin, SingleTableMixin, FilterView):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        queryset = self.order_script_queryset(queryset)
         queryset = queryset.prefetch_related("tags")
         if self.script_view == "favourite":
             queryset = queryset.filter(script__favourites__user=self.request.user)
@@ -224,9 +382,7 @@ class ScriptView(generic.DetailView):
         return models.Script.objects.select_related("owner", "imported_by").prefetch_related(
             Prefetch(
                 "versions",
-                queryset=models.ScriptVersion.objects.prefetch_related("tags")
-                .annotate(num_comments=Count("script__comments", distinct=True))
-                .order_by("-version"),
+                queryset=models.ScriptVersion.objects.prefetch_related("tags").order_by("-version"),
             ),
             Prefetch(
                 "comments",
@@ -289,6 +445,7 @@ class ScriptView(generic.DetailView):
                     diff_script_version.content.copy(),
                 )
                 changes[diff_script_version.version]["previous_version"] = script_version.version
+                changes[diff_script_version.version]["created"] = diff_script_version.created
             diff_script_version = script_version
 
         context["changes"] = changes
@@ -363,7 +520,7 @@ def download_all_roles_json(request, language: str | None = None) -> FileRespons
     edition = get_edition_from_request(request)
     content = get_all_roles(edition)
     content = translate_content(content, request, language)
-    return json_file_response("all_roles", content)
+    return json_file_response("all_roles", "", content)
 
 
 def update_script(script_version: models.ScriptVersion, cleaned_data, author, user):
@@ -492,6 +649,7 @@ class ScriptUploadView(BaseScriptUploadView):
     def get_success_url(self):
         return "/script/" + str(self.script_version.script.pk)
 
+    @transaction.atomic
     def form_valid(self, form):
         user = self.request.user
         json = script_json.get_json_content(form.cleaned_data)
@@ -510,6 +668,9 @@ class ScriptUploadView(BaseScriptUploadView):
 
         # Either get the current script, or create a new one based on the name.
         script, created = models.Script.objects.get_or_create(name=script_name)
+
+        # Serialize uploads for this script before checking or changing its versions.
+        script = models.Script.objects.select_for_update().get(pk=script.pk)
 
         # We only want to set the owner on newly created scripts, so if we've
         # just created the script and the user is authenticated, set the owner to this user
@@ -546,8 +707,14 @@ class ScriptUploadView(BaseScriptUploadView):
             try:
                 script_version = models.ScriptVersion.objects.get(script=script, version=form.cleaned_data["version"])
                 # We're updating an existing version of a script.
-                # Our validation should have caught not being able to upload different
-                # JSON content for this script.
+                if script_version.content != json:
+                    form.add_error(
+                        "version",
+                        f"Version {form.cleaned_data['version']} already exists. "
+                        "You cannot upload a different script with the same version number.",
+                    )
+                    return self.form_invalid(form)
+
                 update_script(script_version, form.cleaned_data, author, user)
                 self.script_version = script_version
                 return HttpResponseRedirect(self.get_success_url())
@@ -557,12 +724,11 @@ class ScriptUploadView(BaseScriptUploadView):
                     # We need to protect this code against instances where a script doesn't
                     # have a latest version.
                     if script.latest_version().content == json:
-                        # The content hasn't change from the latest version, so just update
-                        # the script and exit, the user probably made an error in changing
-                        # the version string.
-                        update_script(script.latest_version(), form.cleaned_data, author, user)
-                        self.script_version = script.latest_version()
-                        return HttpResponseRedirect(self.get_success_url())
+                        form.add_error(
+                            "content",
+                            "This script is identical to the latest version. Please use the same version number if you're trying to update the script.",
+                        )
+                        return self.form_invalid(form)
 
                     if Version(form.cleaned_data["version"]) > script.latest_version().version:
                         # This is newer than the latest version, so set that
@@ -656,15 +822,15 @@ class ScriptDeleteView(LoginRequiredMixin, generic.edit.BaseDeleteView):
 
         if script.owner != self.request.user:
             return HttpResponseForbidden()
-        script_version.delete()
 
-        if script.versions.count() > 0:
-            latest_version = script.latest_version()
-            latest_version.latest = True
-            latest_version.save()
+        try:
+            script_remains = script.delete_version(script_version.pk)
+        except models.ScriptVersion.DoesNotExist:
+            raise Http404("Cannot delete a script version that does not exist.")
+
+        if script_remains:
             self.success_url = self.determine_success_url(script)
         else:
-            script.delete()
             self.success_url = "/"
 
         return HttpResponseRedirect(self.get_success_url())
@@ -673,14 +839,49 @@ class ScriptDeleteView(LoginRequiredMixin, generic.edit.BaseDeleteView):
         return f"/script/{script.pk}"
 
 
-class StatisticsView(generic.ListView, FilterView):
+class StatisticsView(ActiveFilterStyleMixin, generic.ListView, FilterView):
     model = models.ScriptVersion
     template_name = "statistics.html"
     filterset_class = filters.StatisticsFilter
 
+    # ScriptVersion.created was auto_now until migration 0024, so earlier values
+    # indicate the last save rather than when a version was first uploaded.
+    SCRIPT_COUNT_HISTORY_START = date(2023, 4, 21)
+
+    def get_script_count_history(self) -> tuple[list[str], list[int]]:
+        today = timezone.localdate()
+        eligible_script_ids = models.ScriptVersion.plain_objects.filter(
+            latest=True,
+            homebrewiness=models.Homebrewiness.CLOCKTOWER,
+        ).values("script_id")
+        script_creation_dates = (
+            models.Script.objects.filter(pk__in=Subquery(eligible_script_ids))
+            .annotate(first_version=Min("versions__created"))
+            .values_list("first_version", flat=True)
+        )
+        initial_count = 0
+        additions_by_date = Counter()
+        for first_version in script_creation_dates:
+            if first_version is None:
+                initial_count += 1
+                continue
+            creation_date = timezone.localtime(first_version).date()
+            if creation_date < self.SCRIPT_COUNT_HISTORY_START:
+                initial_count += 1
+            elif creation_date <= today:
+                additions_by_date[creation_date] += 1
+
+        return build_script_count_history(
+            self.SCRIPT_COUNT_HISTORY_START,
+            today,
+            initial_count,
+            additions_by_date,
+        )
+
     def get_context_data(self, **kwargs: Any) -> dict[str, Any]:
         self.object_list = super().get_queryset()
         context = super().get_context_data(**kwargs)
+        context["script_count_history_dates"], context["script_count_history_values"] = self.get_script_count_history()
         stats_character = None
         characters_to_display = 25
 
@@ -825,6 +1026,7 @@ def get_script(request, pk: int) -> models.Script:
     return script
 
 
+@transaction.atomic
 def update_user_related_script(model, user: User, script: models.Script) -> None:
     if user.is_authenticated:
         if model.objects.filter(user=user, parent=script).exists():
@@ -842,56 +1044,79 @@ def vote_for_script(request, pk: int) -> None:
     return redirect_to_next(request)
 
 
-def map_similar_scripts(data):
-    return {
-        "value": data[1],
-        "name": data[0].script.name,
-        "scriptPK": data[0].script.pk,
-    }
-
-
 # Seperate call to calculate similar scripts so we can lazy load it
 def get_similar_scripts(request, pk: int, version: str) -> JsonResponse:
     if request.method != "GET":
         raise Http404()
 
-    current_script = models.ScriptVersion.objects.filter(script=pk, version=version)[0]
+    current_script = models.ScriptVersion.plain_objects.filter(script=pk, version=version).first()
+    if current_script is None:
+        raise Http404()
 
-    similarity = {}
-    similarity[models.ScriptTypes.TEENSYVILLE.value] = {}
-    similarity[models.ScriptTypes.FULL.value] = {}
-    for script_version in (
-        models.ScriptVersion.objects.filter(latest=True, homebrewiness=models.Homebrewiness.CLOCKTOWER)
-        .select_related("script")
-        .order_by("pk")
-    ):
-        if current_script == script_version:
-            continue
+    similar = {category: [] for category in models.SIMILARITY_CATEGORIES}
+    mask = current_script.character_mask
+    if not mask or "1" not in mask:
+        return JsonResponse(similar)
 
-        similarity[script_version.script_type][script_version] = script_json.get_similarity(
-            current_script.content,
-            script_version.content,
-            current_script.script_type == script_version.script_type,
+    for category, script_pk, name, value in current_script.similar_scripts():
+        similar[category].append({"value": int(value), "name": name, "scriptPK": script_pk})
+
+    return JsonResponse(similar)
+
+
+@transaction.atomic
+@require_GET
+def script_popularity(request, pk: int) -> JsonResponse:
+    script = get_object_or_404(
+        models.Script.objects.select_for_update(no_key=True).only(
+            "pk", "num_votes", "num_favourites", "popularity_tracking_started_at"
+        ),
+        pk=pk,
+    )
+    today = timezone.localdate()
+    tracking_start = timezone.localtime(script.popularity_tracking_started_at).date()
+    start_date = max(today - timedelta(days=89), tracking_start)
+    current_timezone = timezone.get_current_timezone()
+    start_datetime = datetime.combine(start_date, time.min, tzinfo=current_timezone)
+    end_datetime = datetime.combine(today + timedelta(days=1), time.min, tzinfo=current_timezone)
+
+    event_counts = (
+        models.ScriptEngagementEvent.objects.filter(
+            script_id=script.pk,
+            created_at__gte=start_datetime,
+            created_at__lt=end_datetime,
         )
-    teensville_scripts = map(
-        map_similar_scripts,
-        sorted(
-            similarity[models.ScriptTypes.TEENSYVILLE].items(),
-            key=lambda x: x[1],
-            reverse=True,
-        )[:10],
+        .annotate(day=TruncDate("created_at", tzinfo=current_timezone))
+        .values("day")
+        .annotate(
+            votes_added=Count("pk", filter=Q(event_type=models.ScriptEngagementEvent.EventType.VOTE_ADDED)),
+            votes_removed=Count("pk", filter=Q(event_type=models.ScriptEngagementEvent.EventType.VOTE_REMOVED)),
+            favourites_added=Count("pk", filter=Q(event_type=models.ScriptEngagementEvent.EventType.FAVOURITE_ADDED)),
+            favourites_removed=Count(
+                "pk", filter=Q(event_type=models.ScriptEngagementEvent.EventType.FAVOURITE_REMOVED)
+            ),
+        )
+        .order_by("day")
     )
+    changes_by_date = {
+        event_count["day"]: (
+            event_count["votes_added"],
+            event_count["votes_removed"],
+            event_count["favourites_added"],
+            event_count["favourites_removed"],
+        )
+        for event_count in event_counts
+    }
 
-    full_scripts = map(
-        map_similar_scripts,
-        sorted(
-            similarity[models.ScriptTypes.FULL].items(),
-            key=lambda x: x[1],
-            reverse=True,
-        )[:10],
+    return JsonResponse(
+        popularity.build_popularity_history(
+            start_date,
+            today,
+            script.num_votes,
+            script.num_favourites,
+            changes_by_date,
+        )
     )
-
-    return JsonResponse({"full": list(full_scripts), "teensyville": list(teensville_scripts)})
 
 
 def favourite_script(request, pk: int) -> None:
@@ -944,8 +1169,11 @@ def json_file_response(name, script_version, content):
     temp_file.write(json.encode("utf-8"))
     temp_file.flush()
     temp_file.seek(0)
-    version = str(script_version.version).replace(".", "_")
-    response = FileResponse(temp_file, as_attachment=True, filename=(name + "_" + version + ".json"))
+    if script_version:
+        version = str(script_version.version).replace(".", "_")
+        response = FileResponse(temp_file, as_attachment=True, filename=(name + "_" + version + ".json"))
+    else:
+        response = FileResponse(temp_file, as_attachment=True, filename=(name + ".json"))
     return response
 
 
@@ -1022,7 +1250,7 @@ class CollectionScriptListView(SingleTableView):
         return collection.scripts.select_related("script").prefetch_related("tags").order_by("pk")
 
 
-class CollectionListView(SingleTableMixin, FilterView):
+class CollectionListView(ActiveFilterStyleMixin, SingleTableMixin, FilterView):
     model = models.Collection
     template_name = "collection_list.html"
     table_pagination = {"per_page": 20}
@@ -1049,21 +1277,21 @@ class CollectionEditView(LoginRequiredMixin, generic.edit.UpdateView):
     form_class = forms.CollectionForm
     model = models.Collection
 
-    def form_valid(self, form):
-        form.instance.owner = self.request.user
-        return super().form_valid(form)
+    def get_object(self, queryset=None):
+        """
+        A user should only be able to edit the collections they own. get_object() is used by
+        both GET and POST.
+        """
+        try:
+            collection = super().get_object(queryset)
+        except Http404:
+            raise Http404("This collection doesn't exist.")
+        if collection.owner != self.request.user:
+            raise PermissionDenied("You can only edit collections you own.")
+        return collection
 
     def get_success_url(self) -> str:
         return "/collection/" + str(self.object.id)
-
-    def get(self, request, *args, **kwargs):
-        """
-        A user should only be able to edit the collections they own.
-        """
-        self.object = self.get_object()
-        if self.object.owner != self.request.user:
-            raise Http404("Cannot edit a collection you don't own.")
-        return super().get(request, *args, **kwargs)
 
 
 class CollectionDeleteView(LoginRequiredMixin, generic.edit.BaseDeleteView):
@@ -1091,8 +1319,19 @@ class AddScriptToCollectionView(LoginRequiredMixin, generic.View):
     """
 
     def post(self, request, *args, **kwargs):
-        collection = models.Collection.objects.get(pk=request.POST.get("collection"))
-        script = models.ScriptVersion.objects.get(pk=request.POST.get("script_version"))
+        try:
+            collection = models.Collection.objects.get(pk=request.POST.get("collection"))
+        except (models.Collection.DoesNotExist, ValueError):
+            raise Http404("This collection doesn't exist.")
+
+        if collection.owner != request.user:
+            raise PermissionDenied("You can only add scripts to collections you own.")
+
+        try:
+            script = models.ScriptVersion.objects.get(pk=request.POST.get("script_version"))
+        except (models.ScriptVersion.DoesNotExist, ValueError):
+            raise Http404("This script doesn't exist.")
+
         collection.scripts.add(script)
         return HttpResponseRedirect("/script/" + str(script.script.pk) + "/" + str(script.version))
 
@@ -1199,25 +1438,68 @@ class CommentDeleteView(LoginRequiredMixin, generic.View):
         return HttpResponseRedirect(success_url)
 
 
-class AdvancedSearchResultsView(SingleTableView):
+def get_advanced_search_form(**kwargs):
+    count_choices = [(i, i) for i in range(constants.MAX_CHARACTER_COUNT + 1)]
+    return forms.AdvancedSearchForm(
+        townsfolk_choices=count_choices,
+        outsider_choices=count_choices,
+        minion_choices=count_choices,
+        demon_choices=count_choices,
+        fabled_choices=count_choices,
+        loric_choices=count_choices,
+        traveller_choices=count_choices,
+        **kwargs,
+    )
+
+
+class AdvancedSearchResultsView(ScriptOrderToggleMixin, SingleTableView):
+    """
+    Displays the results of an Advanced Search. All of the search criteria are held in the query string (alongside the
+    table's own "sort" and "page" parameters) and the search is re-run on every request. This keeps pagination and
+    sorting working without any server side state, so it is safe with multiple workers and results never expire.
+    """
+
     model = models.ScriptVersion
     template_name = "scriptlist.html"
     table_pagination = {"per_page": 20}
     ordering = ["-pk"]
     script_view = None
+    search_errors: list[str] = []
+
+    def get_search_data(self):
+        """
+        Returns the search criteria from the query string, or None if the request has no search criteria at all.
+        """
+        form_fields = forms.AdvancedSearchForm.base_fields
+        if not any(name in self.request.GET for name in form_fields):
+            return None
+        data = self.request.GET.copy()
+        for name, field in form_fields.items():
+            if field.required and field.initial is not None:
+                data.setdefault(name, str(field.initial))
+        return data
 
     def get_queryset(self):
-        cache_key = self.request.GET.get("key")
-        if cache_key:
-            data = cache.get_advanced_search_results(cache_key)
-            if data:
-                if data.get("num_results") == 0:
-                    return models.ScriptVersion.objects.none()
-                ids = data.get("queryset_pks", [])
-                order = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(ids)])
-                queryset = models.ScriptVersion.objects.filter(pk__in=ids).prefetch_related("tags").order_by(order)
-                return queryset
-        return models.ScriptVersion.objects.prefetch_related("tags").all()
+        self.search_errors = []
+        data = self.get_search_data()
+        if data is None:
+            self.search_errors = ["No search criteria were provided."]
+            return models.ScriptVersion.objects.none()
+
+        form = get_advanced_search_form(data=data)
+        if not form.is_valid():
+            for field, errors in form.errors.items():
+                label = getattr(form.fields.get(field), "label", None) or field.replace("_", " ").capitalize()
+                self.search_errors.extend(f"{label}: {error}" for error in errors)
+            return models.ScriptVersion.objects.none()
+
+        queryset = filters.advanced_search_queryset(form.cleaned_data).prefetch_related("tags")
+        return self.order_script_queryset(queryset)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["search_errors"] = self.search_errors
+        return context
 
     def get_table_class(self):
         if self.request.user.is_authenticated:
@@ -1225,122 +1507,27 @@ class AdvancedSearchResultsView(SingleTableView):
         return tables.ClocktowerTable
 
 
-class AdvancedSearchView(generic.FormView, SingleTableMixin):
+class AdvancedSearchView(generic.FormView):
+    """
+    Displays the Advanced Search form. A valid submission is redirected to AdvancedSearchResultsView with the search
+    criteria in the query string, so the results can be paged, sorted and refreshed without any server side state.
+    """
+
     template_name = "advanced_search.html"
     form_class = forms.AdvancedSearchForm
-    script_version = None
+    script_view = None
 
     def get_form(self):
-        # This dynamic calculation is very slow and probably isn't worth it, so instead we just use a fixed value of
-        # 0 to 25.
-        # townsfolk = models.ScriptVersion.objects.all().order_by("num_townsfolk")
-        # townsfolk_choices = [(i, i) for i in range(townsfolk.first().num_townsfolk, townsfolk.last().num_townsfolk + 1)]
-        # outsider = models.ScriptVersion.objects.all().order_by("num_outsiders")
-        # outsider_choices = [(i, i) for i in range(outsider.first().num_outsiders, outsider.last().num_outsiders + 1)]
-        # minion = models.ScriptVersion.objects.all().order_by("num_minions")
-        # minion_choices = [(i, i) for i in range(minion.first().num_minions, minion.last().num_minions + 1)]
-        # demon = models.ScriptVersion.objects.all().order_by("num_demons")
-        # demon_choices = [(i, i) for i in range(demon.first().num_demons, demon.last().num_demons + 1)]
-        # fabled = models.ScriptVersion.objects.all().order_by("num_fabled")
-        # fabled_choices = [(i, i) for i in range(fabled.first().num_fabled, fabled.last().num_fabled + 1)]
-        # travellers = models.ScriptVersion.objects.all().order_by("num_travellers")
-        # traveller_choices = [
-        #     (i, i) for i in range(travellers.first().num_travellers, travellers.last().num_travellers + 1)
-        # ]
-
-        return forms.AdvancedSearchForm(
-            townsfolk_choices=[(i, i) for i in range(constants.MAX_CHARACTER_COUNT + 1)],
-            outsider_choices=[(i, i) for i in range(constants.MAX_CHARACTER_COUNT + 1)],
-            minion_choices=[(i, i) for i in range(constants.MAX_CHARACTER_COUNT + 1)],
-            demon_choices=[(i, i) for i in range(constants.MAX_CHARACTER_COUNT + 1)],
-            fabled_choices=[(i, i) for i in range(constants.MAX_CHARACTER_COUNT + 1)],
-            loric_choices=[(i, i) for i in range(constants.MAX_CHARACTER_COUNT + 1)],
-            traveller_choices=[(i, i) for i in range(constants.MAX_CHARACTER_COUNT + 1)],
-            **self.get_form_kwargs(),
-        )
+        return get_advanced_search_form(**self.get_form_kwargs())
 
     def form_valid(self, form):
-        all_scripts = form.cleaned_data.get("all_scripts", False)
-        if all_scripts:
-            queryset = models.ScriptVersion.objects.all()
-        else:
-            queryset = models.ScriptVersion.objects.filter(latest=True)
-
-        include_hybrid = form.cleaned_data.get("include_hybrid", False)
-        if not include_hybrid:
-            queryset = queryset.exclude(homebrewiness=models.Homebrewiness.HYBRID)
-
-        include_homebrew = form.cleaned_data.get("include_homebrew", False)
-        if not include_homebrew:
-            queryset = queryset.exclude(homebrewiness=models.Homebrewiness.HOMEBREW)
-
-        script_type = form.cleaned_data.get("script_type")
-        if script_type == models.ScriptTypes.TEENSYVILLE:
-            queryset = queryset.exclude(script_type=models.ScriptTypes.FULL)
-        else:
-            queryset = queryset.exclude(script_type=models.ScriptTypes.TEENSYVILLE)
-
-        if form.cleaned_data.get("name"):
-            queryset = queryset.annotate(
-                name_similarity=TrigramSimilarity("script__name", form.cleaned_data.get("name"))
-            )
-            queryset = queryset.filter(name_similarity__gt=0).order_by("-name_similarity")
-        if form.cleaned_data.get("author"):
-            queryset = queryset.annotate(author_similarity=TrigramSimilarity("author", form.cleaned_data.get("author")))
-            queryset = queryset.filter(author_similarity__gt=0).order_by("-author_similarity")
-
-        if form.cleaned_data.get("includes_characters"):
-            queryset = filters.include_characters(queryset, form.cleaned_data.get("includes_characters"))
-        if form.cleaned_data.get("excludes_characters"):
-            queryset = filters.exclude_characters(queryset, form.cleaned_data.get("excludes_characters"))
-
-        queryset = queryset.filter(edition__lte=form.cleaned_data.get("edition"))
-        tag_combination = form.cleaned_data.get("tag_combinations")
-        if tag_combination == "AND":
-            for tag in form.cleaned_data.get("tags"):
-                queryset = queryset.filter(tags=tag)
-        else:
-            if form.cleaned_data.get("tags"):
-                queryset = queryset.filter(tags__in=form.cleaned_data.get("tags"))
-
-        if form.cleaned_data.get("number_of_townsfolk"):
-            queryset = queryset.filter(num_townsfolk__in=form.cleaned_data.get("number_of_townsfolk"))
-
-        if form.cleaned_data.get("number_of_outsiders"):
-            queryset = queryset.filter(num_outsiders__in=form.cleaned_data.get("number_of_outsiders"))
-
-        if form.cleaned_data.get("number_of_minions"):
-            queryset = queryset.filter(num_minions__in=form.cleaned_data.get("number_of_minions"))
-
-        if form.cleaned_data.get("number_of_demons"):
-            queryset = queryset.filter(num_demons__in=form.cleaned_data.get("number_of_demons"))
-
-        if form.cleaned_data.get("number_of_fabled"):
-            queryset = queryset.filter(num_fabled__in=form.cleaned_data.get("number_of_fabled"))
-
-        if form.cleaned_data.get("number_of_travellers"):
-            queryset = queryset.filter(num_travellers__in=form.cleaned_data.get("number_of_travellers"))
-
-        if form.cleaned_data.get("number_of_loric"):
-            queryset = queryset.filter(num_loric__in=form.cleaned_data.get("number_of_loric"))
-
-        if form.cleaned_data.get("minimum_number_of_likes"):
-            queryset = queryset.annotate(score=Count("script__votes"))
-            queryset = queryset.filter(score__gte=form.cleaned_data.get("minimum_number_of_likes"))
-
-        if form.cleaned_data.get("minimum_number_of_favourites"):
-            queryset = queryset.annotate(num_favs=Count("script__favourites"))
-            queryset = queryset.filter(num_favs__gte=form.cleaned_data.get("minimum_number_of_favourites"))
-
-        if form.cleaned_data.get("minimum_number_of_comments"):
-            queryset = queryset.annotate(num_comments=Count("script__comments"))
-            queryset = queryset.filter(num_comments__gte=form.cleaned_data.get("minimum_number_of_comments"))
-
-        queryset = queryset.order_by("-pk")
-        pk_list = list(queryset.values_list("pk", flat=True))
-        cache_key = cache.store_advanced_search_results(pk_list)
-
-        return redirect(f"/script/search/results?key={cache_key}")
+        params = {}
+        for name in form.fields:
+            if name in form.data:
+                values = [value for value in form.data.getlist(name) if value.strip()]
+                if values:
+                    params[name] = values
+        return redirect(f"{reverse('advanced_search_results')}?{urlencode(params, doseq=True)}")
 
 
 class HealthCheckView(generic.View):
@@ -1408,100 +1595,92 @@ def character_missing_from_database(character_id, roles):
     return False
 
 
-def create_characters_and_determine_homebrew_status(script_content: dict, script: models.Script):
+def create_characters_and_determine_homebrew_status(
+    script_content: dict,
+    script: models.Script,
+    *,
+    clocktower_character_types: dict[str, str] | None = None,
+    homebrew_character_updates: dict[str, models.HomebrewCharacter] | None = None,
+):
     homebrewiness = models.Homebrewiness.CLOCKTOWER
     non_clocktower_characters = 0
     entries_to_ignore = 0
-    roles = []
-    try:
-        roles = requests.get("https://script.bloodontheclocktower.com/data/roles.json", timeout=2)
-    except requests.exceptions.Timeout:
-        pass
+    roles = cache.get_official_roles()
 
     for item in script_content:
-        if item.get("id", "") == "_meta":
+        character_id = item.get("id", "")
+        if character_id == "_meta":
             entries_to_ignore += 1
             continue
 
-        try:
-            character = models.ClocktowerCharacter.objects.get(character_id=item.get("id", ""))
+        if clocktower_character_types is None:
+            try:
+                character_type = (
+                    models.ClocktowerCharacter.objects.only("character_type")
+                    .get(character_id=character_id)
+                    .character_type
+                )
+            except models.ClocktowerCharacter.DoesNotExist:
+                character_type = None
+        else:
+            character_type = clocktower_character_types.get(character_id)
+
+        if character_type is not None:
             # Ignore official Loric and Fabled characters, as they shouldn't count against
             # homebrew/hybrid status (homebrew Loric/Fabled characters still count).
-            if character.character_type in (
+            if character_type in (
                 models.CharacterType.LORIC,
                 models.CharacterType.FABLED,
             ):
                 entries_to_ignore += 1
-        except models.ClocktowerCharacter.DoesNotExist:
-            if roles.ok and character_missing_from_database(item.get("id", ""), js.loads(roles.content)):
-                # It's possible we don't know about this character because it has just been released
-                # and it's not been added to the database. In this case check the script tool for roles
-                # and if it present, don't mark this as a homebrew character.
-                continue
-            if len(item.keys()) == 1:
-                # If the character element has more than 1 key then it is almost certainly an attempt at a
-                # homebrew/hybrid character, otherwise it's probably official.
-                continue
+            continue
 
-            non_clocktower_characters += 1
+        if roles is not None and character_missing_from_database(character_id, roles):
+            # It's possible we don't know about this character because it has just been released
+            # and it's not been added to the database. In this case check the official role data
+            # and if it is present, don't mark this as a homebrew character.
+            continue
+        if roles is None and len(item.keys()) == 1:
+            # If the character element has more than 1 key then it is almost certainly an attempt at a
+            # homebrew/hybrid character, otherwise it's probably official when the role list is unavailable.
+            continue
 
-            image_url = item.get("image")
-            if isinstance(image_url, list):
-                image_url = ",".join(image_url)
-            try:
-                homebrew_character = models.HomebrewCharacter.objects.get(character_id=item.get("id"))
-                if homebrew_character.script and homebrew_character.script == script:
-                    models.HomebrewCharacter.objects.update_or_create(
-                        character_id=item.get("id"),
-                        script=script,
-                        defaults={
-                            "character_name": item.get("name"),
-                            "image_url": image_url,
-                            "character_type": get_character_type_from_team(item.get("team")).value,
-                            "ability": item.get("ability"),
-                            "first_night_position": item.get("firstNight", None),
-                            "other_night_position": item.get("otherNight", None),
-                            "first_night_reminder": item.get("firstNightReminder", None),
-                            "other_night_reminder": item.get("otherNightReminder", None),
-                            "global_reminders": ",".join(item.get("remindersGlobal", [])),
-                            "reminders": ",".join(item.get("reminders", [])),
-                            "modifies_setup": item.get("setup", False),
-                        },
-                    )
-                else:
-                    models.HomebrewCharacter.objects.update_or_create(
-                        character_id=item.get("id"),
-                        defaults={
-                            "script": script,
-                            "character_name": item.get("name"),
-                            "image_url": image_url,
-                            "character_type": get_character_type_from_team(item.get("team")).value,
-                            "ability": item.get("ability"),
-                            "first_night_position": item.get("firstNight", None),
-                            "other_night_position": item.get("otherNight", None),
-                            "first_night_reminder": item.get("firstNightReminder", None),
-                            "other_night_reminder": item.get("otherNightReminder", None),
-                            "global_reminders": ",".join(item.get("remindersGlobal", [])),
-                            "reminders": ",".join(item.get("reminders", [])),
-                            "modifies_setup": item.get("setup", False),
-                        },
-                    )
-            except models.HomebrewCharacter.DoesNotExist:
-                models.HomebrewCharacter.objects.create(
-                    character_id=item.get("id"),
-                    script=script,
-                    character_name=item.get("name"),
-                    image_url=image_url,
-                    character_type=get_character_type_from_team(item.get("team")).value,
-                    ability=item.get("ability"),
-                    first_night_position=item.get("firstNight", None),
-                    other_night_position=item.get("otherNight", None),
-                    first_night_reminder=item.get("firstNightReminder", None),
-                    other_night_reminder=item.get("otherNightReminder", None),
-                    global_reminders=",".join(item.get("remindersGlobal", [])),
-                    reminders=",".join(item.get("reminders", [])),
-                    modifies_setup=item.get("setup", False),
-                )
+        non_clocktower_characters += 1
+
+        image_url = item.get("image")
+        if isinstance(image_url, list):
+            image_url = ",".join(image_url)
+        defaults = {
+            "character_name": (item.get("name") or character_id)[:30],
+            "image_url": image_url,
+            "character_type": get_character_type_from_team(item.get("team")).value,
+            "ability": item.get("ability") or "",
+            "first_night_position": item.get("firstNight", None),
+            "other_night_position": item.get("otherNight", None),
+            "first_night_reminder": item.get("firstNightReminder", None),
+            "other_night_reminder": item.get("otherNightReminder", None),
+            "global_reminders": ",".join(item.get("remindersGlobal", [])),
+            "reminders": ",".join(item.get("reminders", [])),
+            "modifies_setup": item.get("setup", False),
+        }
+        if homebrew_character_updates is not None:
+            homebrew_character_updates[character_id] = models.HomebrewCharacter(
+                character_id=character_id,
+                script=script,
+                **defaults,
+            )
+        else:
+            if (
+                models.HomebrewCharacter.objects.filter(character_id=character_id, script__isnull=False)
+                .exclude(script=script)
+                .exists()
+            ):
+                # Belongs to another script; never reassign or overwrite it.
+                continue
+            models.HomebrewCharacter.objects.update_or_create(
+                character_id=character_id,
+                defaults={"script": script, **defaults},
+            )
 
     if non_clocktower_characters == len(script_content) - entries_to_ignore:
         homebrewiness = models.Homebrewiness.HOMEBREW
